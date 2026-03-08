@@ -31,22 +31,34 @@ class CodeLayer:
 
         self.font = pygame.font.SysFont("consolas", 22)
         self.line_height = 28
+        self.panel_x = 40
+        self.panel_y = 35
+        self.panel_w = self.width - 80
+        self.panel_h = int(self.height * 0.42)
 
         with open(path, "r", encoding="utf-8") as f:
             code = f.read()
 
         self.tokens = list(lex(code, PythonLexer()))
+        self.scroll_y = 0.0
 
     def draw(self, screen, spectrum):
+        bass = float(spectrum[3]) if len(spectrum) > 3 else 0.0
         energy = float(spectrum[4]) if len(spectrum) > 4 else 0.0
         lift = int(energy * 35)
 
-        panel = pygame.Surface((self.width - 80, int(self.height * 0.42)), pygame.SRCALPHA)
-        panel.fill((12, 16, 24, 170))
-        screen.blit(panel, (40, 35))
+        self.scroll_y += 0.18 + bass * 0.35
 
-        x0 = 65
-        y = 60
+        panel = pygame.Surface((self.panel_w, self.panel_h), pygame.SRCALPHA)
+        panel.fill((12, 16, 24, 170))
+        screen.blit(panel, (self.panel_x, self.panel_y))
+
+        clip_rect = pygame.Rect(self.panel_x, self.panel_y, self.panel_w, self.panel_h)
+        old_clip = screen.get_clip()
+        screen.set_clip(clip_rect)
+
+        x0 = self.panel_x + 25
+        y = self.panel_y + 25 - self.scroll_y
         x = x0
 
         for token, text in self.tokens:
@@ -63,3 +75,11 @@ class CodeLayer:
                 if idx < len(parts) - 1:
                     y += self.line_height
                     x = x0
+
+        screen.set_clip(old_clip)
+
+        total_lines = sum(text.count("\n") for _, text in self.tokens) + 1
+        total_height = total_lines * self.line_height
+
+        if self.scroll_y > total_height + 40:
+            self.scroll_y = -self.panel_h * 0.35
