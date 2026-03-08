@@ -45,10 +45,9 @@ class CodeLayer:
         self.tokens = list(lex(code, PythonLexer()))
         self.items = []
 
-        self.scroll_y = 0.0
+        self.scroll_y = -20.0
         self.time = 0.0
 
-        # typing / reveal
         self.total_chars = 0
         self.reveal_chars = 0.0
         self.typing_done = False
@@ -88,7 +87,7 @@ class CodeLayer:
                 if idx < len(parts) - 1:
                     y += self.line_height
                     x = x0
-                    self.total_chars += 1  # newline timing
+                    self.total_chars += 1
 
         self.total_height = max(0, y - y0) + self.line_height
 
@@ -128,7 +127,6 @@ class CodeLayer:
         return item["text"][:visible_count]
 
     def _get_cursor_position(self, reveal_index):
-        # Find the currently active token and measure partial width
         for item in self.items:
             start = item["char_start"]
             end = start + item["char_len"]
@@ -154,14 +152,18 @@ class CodeLayer:
         self.time += dt
         self.cursor_phase += dt * 3.2
 
-        # Elegant typing speed: steady base with music influence
         if not self.typing_done:
             cps = 18 + bass * 22 + mids * 10
             self.reveal_chars += cps * dt
+
+            # slow ambient scroll while typing
+            self.scroll_y += 0.035 + bass * 0.05
+
             if self.reveal_chars >= self.total_chars:
                 self.reveal_chars = float(self.total_chars)
                 self.typing_done = True
         else:
+            # stronger scroll once typing is finished
             self.scroll_y += 0.11 + bass * 0.18
 
         reveal_index = int(self.reveal_chars)
@@ -212,7 +214,6 @@ class CodeLayer:
                 max(0, min(255, int(base[2] + b_shift + pulse))),
             )
 
-            # Elegant glow
             glow = self.font.render(text, True, (
                 min(255, color[0] + 10),
                 min(255, color[1] + 10),
@@ -221,7 +222,6 @@ class CodeLayer:
             glow.set_alpha(26 + int(highs * 28))
             screen.blit(glow, (x + dx + 0.8, y + dy + 0.5))
 
-            # Selective surreal layer: per-character shimmer on special tokens
             if self._token_is_shimmered(token):
                 char_x = x + dx
                 for idx, ch in enumerate(text):
@@ -255,10 +255,8 @@ class CodeLayer:
                 surf = self.font.render(text, True, color)
                 screen.blit(surf, (x + dx, y + dy))
 
-        # Typing cursor
         if not self.typing_done or math.sin(self.cursor_phase) > 0:
             cx, cy = self._get_cursor_position(reveal_index)
-            cx -= 0
             cy -= self.scroll_y
 
             if self.panel_y <= cy <= self.panel_y + self.panel_h:
@@ -269,8 +267,7 @@ class CodeLayer:
 
         screen.set_clip(old_clip)
 
-        if self.typing_done and self.scroll_y > self.total_height + 40:
-            self.scroll_y = -self.panel_h * 0.42
+        if self.scroll_y > self.total_height + 60:
+            self.scroll_y = -self.panel_h * 0.45
             self.reveal_chars = 0.0
             self.typing_done = False
-            self.scroll_y = 0.0
