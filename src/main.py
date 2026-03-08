@@ -11,7 +11,6 @@ HEIGHT = 820
 def draw_background(screen, width, height, t):
     screen.fill((6, 8, 14))
 
-    # Soft gradient bands
     for i in range(0, height, 3):
         amt = i / max(1, height)
         color = (
@@ -21,7 +20,6 @@ def draw_background(screen, width, height, t):
         )
         pygame.draw.line(screen, color, (0, i), (width, i))
 
-    # Faint pulse ring
     cx = width // 2
     cy = int(height * 0.72)
     r = 90 + int((t % 120) * 0.35)
@@ -48,6 +46,14 @@ def run():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_1:
+                    vis.set_mode("bars")
+                elif event.key == pygame.K_2:
+                    vis.set_mode("plasma")
+                elif event.key == pygame.K_SPACE:
+                    vis.toggle_mode()
 
         spectrum = audio.get_spectrum()
         vis.update(spectrum)
