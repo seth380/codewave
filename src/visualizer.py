@@ -15,7 +15,7 @@ class SpectrumVisualizer:
         self.peak = np.zeros(self.bar_count, dtype=float)
 
         self.floor_margin = 60
-        self.center_y = int(height * 0.72)
+        self.center_y = int(height * 0.78)
 
         self.plasma_surface = pygame.Surface((width, height))
         self.plasma_scale = 8
@@ -145,9 +145,9 @@ class SpectrumVisualizer:
                 v = v * 0.25
                 glow = (v + 1.0) * 0.5
 
-                r = int(30 + glow * 90 + bass * 80)
-                g = int(40 + glow * 110 + mids * 70)
-                b = int(90 + glow * 150 + highs * 80)
+                r = int(40 + glow * 160 + bass * 120)
+                g = int(60 + glow * 180 + mids * 110)
+                b = int(120 + glow * 220 + highs * 140)
 
                 r = max(0, min(255, r))
                 g = max(0, min(255, g))
