@@ -157,14 +157,14 @@ class CodeLayer:
             self.reveal_chars += cps * dt
 
             # slow ambient scroll while typing
-            self.scroll_y += 0.035 + bass * 0.05
+            self.scroll_y += 0.06 + bass * 0.07
 
             if self.reveal_chars >= self.total_chars:
                 self.reveal_chars = float(self.total_chars)
                 self.typing_done = True
         else:
             # stronger scroll once typing is finished
-            self.scroll_y += 0.11 + bass * 0.18
+            self.scroll_y += 0.16 + bass * 0.22
 
         reveal_index = int(self.reveal_chars)
 
