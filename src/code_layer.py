@@ -7,20 +7,20 @@ from pygments.token import Token
 
 def token_color(token):
     if token in Token.Keyword:
-        return (255, 140, 110)
+        return (255, 150, 120)
     if token in Token.Name.Function:
-        return (120, 200, 255)
+        return (120, 210, 255)
     if token in Token.Name.Class:
-        return (255, 210, 120)
+        return (255, 220, 140)
     if token in Token.String:
-        return (140, 220, 160)
+        return (150, 225, 175)
     if token in Token.Comment:
-        return (120, 130, 140)
+        return (115, 125, 138)
     if token in Token.Number:
-        return (255, 190, 120)
+        return (255, 195, 130)
     if token in Token.Operator:
-        return (220, 220, 220)
-    return (210, 210, 210)
+        return (220, 224, 232)
+    return (214, 218, 228)
 
 
 class CodeLayer:
@@ -31,12 +31,13 @@ class CodeLayer:
         self.height = height
 
         self.font = pygame.font.SysFont("consolas", 22)
+        self.font_small = pygame.font.SysFont("consolas", 16)
         self.line_height = 28
 
         self.panel_x = 40
-        self.panel_y = 35
+        self.panel_y = 34
         self.panel_w = self.width - 80
-        self.panel_h = int(self.height * 0.30)
+        self.panel_h = int(self.height * 0.29)
 
         with open(path, "r", encoding="utf-8") as f:
             code = f.read()
@@ -49,8 +50,8 @@ class CodeLayer:
         self._build_layout()
 
     def _build_layout(self):
-        x0 = self.panel_x + 28
-        y0 = self.panel_y + 24
+        x0 = self.panel_x + 30
+        y0 = self.panel_y + 26
         x = x0
         y = y0
 
@@ -61,9 +62,7 @@ class CodeLayer:
                 if part:
                     base = token_color(token)
                     width, _ = self.font.size(part)
-
-                    # per-token seed from position + token identity
-                    seed = (x * 0.013) + (y * 0.021) + (len(part) * 0.17)
+                    seed = (x * 0.012) + (y * 0.017) + (len(part) * 0.19)
 
                     self.items.append({
                         "token": token,
@@ -84,32 +83,44 @@ class CodeLayer:
 
     def _token_motion_scale(self, token):
         if token in Token.Keyword:
-            return 1.15
+            return 1.00
         if token in Token.Name.Function:
-            return 1.25
+            return 1.08
         if token in Token.Name.Class:
-            return 1.15
+            return 1.02
         if token in Token.Operator:
-            return 0.95
+            return 0.85
         if token in Token.Comment:
-            return 0.55
+            return 0.45
         if token in Token.String:
-            return 0.80
-        return 0.70
+            return 0.65
+        return 0.55
 
-    def draw(self, screen, spectrum):
+    def draw(self, screen, spectrum, mode_name="PLASMA"):
         bass = float(spectrum[2]) if len(spectrum) > 2 else 0.0
         mids = float(spectrum[8]) if len(spectrum) > 8 else bass
         highs = float(spectrum[20]) if len(spectrum) > 20 else mids
-
-        energy = (bass * 0.5) + (mids * 0.35) + (highs * 0.15)
+        energy = (bass * 0.50) + (mids * 0.35) + (highs * 0.15)
 
         self.time += 0.016
-        self.scroll_y += 0.16 + bass * 0.30
+        self.scroll_y += 0.11 + bass * 0.18
 
         panel = pygame.Surface((self.panel_w, self.panel_h), pygame.SRCALPHA)
-        panel.fill((10, 14, 22, 118))
+        panel.fill((9, 13, 22, 96))
+
+        # soft top highlight
+        pygame.draw.line(panel, (120, 150, 210, 55), (0, 0), (self.panel_w, 0), 2)
+        pygame.draw.line(panel, (70, 90, 140, 26), (0, 1), (self.panel_w, 1), 1)
+
+        # faint inner border
+        pygame.draw.rect(panel, (85, 110, 160, 28), panel.get_rect(), 1, border_radius=10)
+
         screen.blit(panel, (self.panel_x, self.panel_y))
+
+        # tiny label
+        label = self.font_small.render(f"CODEWAVE // {mode_name}", True, (150, 170, 210))
+        label.set_alpha(170)
+        screen.blit(label, (self.panel_x + 18, self.panel_y + 6))
 
         clip_rect = pygame.Rect(self.panel_x, self.panel_y, self.panel_w, self.panel_h)
         old_clip = screen.get_clip()
@@ -128,16 +139,14 @@ class CodeLayer:
 
             motion_scale = self._token_motion_scale(token)
 
-            # subtle spatial motion
-            dx = math.sin(self.time * 1.6 + seed * 1.7) * (0.9 + bass * 2.8) * 0.35 * motion_scale
-            dy = math.cos(self.time * 1.2 + seed * 1.3) * (0.6 + mids * 1.8) * 0.22 * motion_scale
+            dx = math.sin(self.time * 1.15 + seed * 1.35) * (0.35 + bass * 0.90) * motion_scale
+            dy = math.cos(self.time * 0.92 + seed * 1.10) * (0.18 + mids * 0.45) * motion_scale
 
-            # rgb noise by token type + position
-            r_shift = math.sin(self.time * 1.8 + x * 0.011 + y * 0.017 + seed) * (10 + 28 * highs)
-            g_shift = math.sin(self.time * 1.5 + x * 0.009 + y * 0.013 + seed * 1.2) * (8 + 20 * mids)
-            b_shift = math.sin(self.time * 2.0 + x * 0.015 + y * 0.010 + seed * 0.8) * (12 + 26 * bass)
+            r_shift = math.sin(self.time * 1.20 + x * 0.007 + seed) * (5 + 8 * highs)
+            g_shift = math.sin(self.time * 1.05 + y * 0.006 + seed * 1.1) * (4 + 6 * mids)
+            b_shift = math.sin(self.time * 1.35 + x * 0.008 + y * 0.005 + seed * 0.9) * (6 + 10 * bass)
 
-            pulse = 10 + int(24 * energy)
+            pulse = 6 + int(16 * energy)
 
             color = (
                 max(0, min(255, int(base[0] + r_shift + pulse))),
@@ -145,21 +154,19 @@ class CodeLayer:
                 max(0, min(255, int(base[2] + b_shift + pulse))),
             )
 
-            # soft ghost layer for shimmer
-            ghost_color = (
-                min(255, color[0] + 18),
-                min(255, color[1] + 18),
-                min(255, color[2] + 18),
-            )
-
-            ghost = self.font.render(text, True, ghost_color)
-            ghost.set_alpha(40 + int(highs * 50))
-            screen.blit(ghost, (x + dx + 1.2, y + dy + 0.8))
+            # elegant soft glow
+            glow = self.font.render(text, True, (
+                min(255, color[0] + 10),
+                min(255, color[1] + 10),
+                min(255, color[2] + 10),
+            ))
+            glow.set_alpha(26 + int(highs * 28))
+            screen.blit(glow, (x + dx + 0.8, y + dy + 0.5))
 
             surf = self.font.render(text, True, color)
             screen.blit(surf, (x + dx, y + dy))
 
         screen.set_clip(old_clip)
 
-        if self.scroll_y > self.total_height + 50:
-            self.scroll_y = -self.panel_h * 0.45
+        if self.scroll_y > self.total_height + 40:
+            self.scroll_y = -self.panel_h * 0.42
