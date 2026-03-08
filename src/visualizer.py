@@ -1,3 +1,4 @@
+import math
 import pygame
 import numpy as np
 
@@ -7,12 +8,28 @@ class SpectrumVisualizer:
         self.width = width
         self.height = height
 
+        self.mode = "bars"   # "bars" or "plasma"
+
         self.bar_count = 64
         self.spectrum = np.zeros(self.bar_count, dtype=float)
         self.peak = np.zeros(self.bar_count, dtype=float)
 
         self.floor_margin = 60
         self.center_y = int(height * 0.72)
+
+        self.plasma_surface = pygame.Surface((width, height))
+        self.plasma_scale = 8
+        self.plasma_w = max(1, width // self.plasma_scale)
+        self.plasma_h = max(1, height // self.plasma_scale)
+        self.plasma_small = pygame.Surface((self.plasma_w, self.plasma_h))
+        self.time = 0.0
+
+    def set_mode(self, mode):
+        if mode in ("bars", "plasma"):
+            self.mode = mode
+
+    def toggle_mode(self):
+        self.mode = "plasma" if self.mode == "bars" else "bars"
 
     def update(self, spectrum):
         if len(spectrum) < self.bar_count:
@@ -24,18 +41,13 @@ class SpectrumVisualizer:
         new_vals = []
         for i, chunk in enumerate(chunks):
             val = float(np.mean(chunk))
-
-            # Slight bias so lower bands feel stronger
             bias = 1.0 - (i / self.bar_count) * 0.35
             val *= bias
-
-            # Mild non-linear boost
             val = min(1.0, val ** 0.8)
             new_vals.append(val)
 
         new_vals = np.array(new_vals, dtype=float)
 
-        # Smooth attack / release
         for i in range(self.bar_count):
             target = new_vals[i]
             if target > self.spectrum[i]:
@@ -43,11 +55,16 @@ class SpectrumVisualizer:
             else:
                 self.spectrum[i] = self.spectrum[i] * 0.85 + target * 0.15
 
-        # Peak hold with decay
         self.peak = np.maximum(self.peak * 0.97, self.spectrum)
+        self.time += 0.03 + float(np.mean(self.spectrum[:8])) * 0.08
 
     def draw(self, screen):
-        # Center guide line
+        if self.mode == "plasma":
+            self.draw_plasma(screen)
+        else:
+            self.draw_bars(screen)
+
+    def draw_bars(self, screen):
         pygame.draw.line(
             screen,
             (35, 40, 55),
@@ -68,23 +85,19 @@ class SpectrumVisualizer:
             h = max(2, int(val * max_height))
             peak_h = max(2, int(peak_val * max_height))
 
-            # Bars radiate outward from center
             x_right = self.width // 2 + i * (bar_width + bar_gap)
             x_left = self.width // 2 - (i + 1) * (bar_width + bar_gap)
 
-            # Color shifts slightly with energy
             c1 = 90 + int(val * 120)
             c2 = 120 + int(val * 80)
             c3 = 255
 
-            # Main bars
             rect_right = pygame.Rect(x_right, self.center_y - h, bar_width, h * 2)
             rect_left = pygame.Rect(x_left, self.center_y - h, bar_width, h * 2)
 
             pygame.draw.rect(screen, (c1, c2, c3), rect_right, border_radius=3)
             pygame.draw.rect(screen, (c1, c2, c3), rect_left, border_radius=3)
 
-            # Inner glow strips
             glow_w = max(1, bar_width // 4)
             pygame.draw.rect(
                 screen,
@@ -99,36 +112,55 @@ class SpectrumVisualizer:
                 border_radius=2,
             )
 
-            # Peak markers
             peak_y_top = self.center_y - peak_h
             peak_y_bottom = self.center_y + peak_h
 
-            pygame.draw.line(
-                screen,
-                (255, 255, 255),
-                (x_right, peak_y_top),
-                (x_right + bar_width, peak_y_top),
-                2,
-            )
-            pygame.draw.line(
-                screen,
-                (255, 255, 255),
-                (x_right, peak_y_bottom),
-                (x_right + bar_width, peak_y_bottom),
-                2,
-            )
+            pygame.draw.line(screen, (255, 255, 255), (x_right, peak_y_top), (x_right + bar_width, peak_y_top), 2)
+            pygame.draw.line(screen, (255, 255, 255), (x_right, peak_y_bottom), (x_right + bar_width, peak_y_bottom), 2)
+            pygame.draw.line(screen, (255, 255, 255), (x_left, peak_y_top), (x_left + bar_width, peak_y_top), 2)
+            pygame.draw.line(screen, (255, 255, 255), (x_left, peak_y_bottom), (x_left + bar_width, peak_y_bottom), 2)
 
-            pygame.draw.line(
-                screen,
-                (255, 255, 255),
-                (x_left, peak_y_top),
-                (x_left + bar_width, peak_y_top),
-                2,
-            )
-            pygame.draw.line(
-                screen,
-                (255, 255, 255),
-                (x_left, peak_y_bottom),
-                (x_left + bar_width, peak_y_bottom),
-                2,
-            )
+    def draw_plasma(self, screen):
+        bass = float(np.mean(self.spectrum[:6]))
+        mids = float(np.mean(self.spectrum[6:20]))
+        highs = float(np.mean(self.spectrum[20:40]))
+
+        px = pygame.PixelArray(self.plasma_small)
+
+        for y in range(self.plasma_h):
+            ny = y / max(1, self.plasma_h)
+            for x in range(self.plasma_w):
+                nx = x / max(1, self.plasma_w)
+
+                v = 0.0
+                v += math.sin((x * 0.18) + self.time * (1.6 + bass * 4.0))
+                v += math.sin((y * 0.22) + self.time * (1.1 + mids * 3.0))
+                v += math.sin((x + y) * 0.12 + self.time * (1.4 + highs * 4.5))
+
+                cx = x - self.plasma_w / 2
+                cy = y - self.plasma_h / 2
+                dist = math.sqrt(cx * cx + cy * cy)
+                v += math.sin(dist * 0.24 - self.time * (2.2 + bass * 5.0))
+
+                v = v * 0.25
+                glow = (v + 1.0) * 0.5
+
+                r = int(30 + glow * 90 + bass * 80)
+                g = int(40 + glow * 110 + mids * 70)
+                b = int(90 + glow * 150 + highs * 80)
+
+                r = max(0, min(255, r))
+                g = max(0, min(255, g))
+                b = max(0, min(255, b))
+
+                px[x, y] = (r, g, b)
+
+        del px
+
+        plasma = pygame.transform.smoothscale(self.plasma_small, (self.width, self.height))
+        plasma.set_alpha(150)
+        screen.blit(plasma, (0, 0))
+
+        ring_r = 120 + int(bass * 90)
+        pygame.draw.circle(screen, (180, 210, 255), (self.width // 2, self.center_y), ring_r, 1)
+        pygame.draw.circle(screen, (80, 110, 170), (self.width // 2, self.center_y), ring_r + 30, 1)
