@@ -47,7 +47,7 @@ class SpectrumVisualizer:
 
         # Hue rotation state — bars and plasma have independent hue cycles
         self.hue_base = 0.0          # slowly drifts over time
-        self.hue_speed = 0.0018      # base drift speed
+        self.hue_speed = 0.0004      # base drift speed
         self.beat_flash = 0.0        # 0-1 flash intensity on bass hit
         self.last_bass = 0.0
 
@@ -84,29 +84,29 @@ class SpectrumVisualizer:
         for i in range(self.bar_count):
             target = new_vals[i]
             if target > self.spectrum[i]:
-                self.spectrum[i] = self.spectrum[i] * 0.55 + target * 0.45
+                self.spectrum[i] = self.spectrum[i] * 0.78 + target * 0.22
             else:
-                self.spectrum[i] = self.spectrum[i] * 0.85 + target * 0.15
+                self.spectrum[i] = self.spectrum[i] * 0.94 + target * 0.06
 
         # Beat detection: sharp bass transient triggers flash + hue spike
         bass_now = float(np.mean(self.spectrum[:4]))
         bass_delta = bass_now - self.last_bass
         if bass_delta > 0.08:
-            self.beat_flash = min(1.0, self.beat_flash + bass_delta * 2.2)
-            self.hue_speed = 0.004 + bass_delta * 0.06   # tempo-surge hue spin
+            self.beat_flash = min(1.0, self.beat_flash + bass_delta * 1.4)
+            self.hue_speed = 0.0012 + bass_delta * 0.014   # gentle tempo-surge
         else:
-            self.hue_speed = max(0.0018, self.hue_speed * 0.96)
-        self.beat_flash = max(0.0, self.beat_flash - 0.055)
+            self.hue_speed = max(0.0004, self.hue_speed * 0.985)
+        self.beat_flash = max(0.0, self.beat_flash - 0.018)  # slow fade
         self.last_bass = bass_now
 
         # Update peak and snapshot hue when bar hits new peak
         for i in range(self.bar_count):
             if self.spectrum[i] >= self.peak[i]:
                 self.peak_hue[i] = self.hue_base + i / self.bar_count * 0.5
-        self.peak = np.maximum(self.peak * 0.97, self.spectrum)
+        self.peak = np.maximum(self.peak * 0.993, self.spectrum)
 
-        self.hue_base += self.hue_speed + bass_now * 0.003
-        self.time += 0.03 + bass_now * 0.08
+        self.hue_base += self.hue_speed + bass_now * 0.0008
+        self.time += 0.006 + bass_now * 0.012
 
     # ------------------------------------------------------------------ #
     #  BARS
@@ -150,7 +150,7 @@ class SpectrumVisualizer:
             # Each bar gets a hue offset: rainbow sweep across the spectrum
             # plus global hue drift and a shimmer wave
             hue_pos  = (i / half_count) * 0.72
-            shimmer  = math.sin(self.time * 2.1 + i * 0.18) * 0.04
+            shimmer  = math.sin(self.time * 0.5 + i * 0.18) * 0.03
             hue      = (self.hue_base + hue_pos + shimmer) % 1.0
             sat      = 0.72 + val * 0.28
             bri      = 0.30 + val * 0.70
@@ -201,7 +201,7 @@ class SpectrumVisualizer:
     def _draw_waveform_ring(self, screen, bass, mids, highs):
         cx = self.width // 2
         cy = self.center_y
-        base_r = 88 + int(bass * 55)
+        base_r = 88 + int(bass * 30)
         spoke_count = self.bar_count
 
         pts_outer = []
@@ -210,7 +210,7 @@ class SpectrumVisualizer:
         for i in range(spoke_count):
             angle = self.ring_angles[i] - math.pi / 2
             val = self.spectrum[i % self.bar_count]
-            spoke = val * (40 + bass * 50)
+            spoke = val * (22 + bass * 28)
 
             r_out = base_r + spoke
             r_in  = base_r - spoke * 0.4
@@ -263,21 +263,21 @@ class SpectrumVisualizer:
                 ny = y / max(1, self.plasma_h)
 
                 # Richer field: 5 interfering waves instead of 4
-                v  = math.sin((x * 0.18) + self.time * (1.6 + bass * 4.0))
-                v += math.sin((y * 0.22) + self.time * (1.1 + mids * 3.0))
-                v += math.sin((x + y) * 0.12 + self.time * (1.4 + highs * 4.5))
-                v += math.sin((x - y) * 0.09 + self.time * (0.9 + bass * 3.2))
+                v  = math.sin((x * 0.18) + self.time * (0.30 + bass * 0.80))
+                v += math.sin((y * 0.22) + self.time * (0.22 + mids * 0.55))
+                v += math.sin((x + y) * 0.12 + self.time * (0.26 + highs * 0.80))
+                v += math.sin((x - y) * 0.09 + self.time * (0.18 + bass * 0.55))
 
                 cx = x - self.plasma_w / 2
                 cy_f = y - self.plasma_h / 2
                 dist = math.sqrt(cx * cx + cy_f * cy_f)
-                v += math.sin(dist * 0.24 - self.time * (2.2 + bass * 5.0))
+                v += math.sin(dist * 0.24 - self.time * (0.40 + bass * 0.90))
 
-                # Second distorted ripple centre (drifts with time)
-                cx2 = x - self.plasma_w * (0.3 + 0.2 * math.sin(self.time * 0.4))
-                cy2 = y - self.plasma_h * (0.6 + 0.15 * math.cos(self.time * 0.3))
+                # Second drifting ripple centre
+                cx2 = x - self.plasma_w * (0.3 + 0.2 * math.sin(self.time * 0.07))
+                cy2 = y - self.plasma_h * (0.6 + 0.15 * math.cos(self.time * 0.055))
                 dist2 = math.sqrt(cx2 * cx2 + cy2 * cy2)
-                v += math.sin(dist2 * 0.20 - self.time * (1.6 + mids * 3.5)) * 0.7
+                v += math.sin(dist2 * 0.20 - self.time * (0.28 + mids * 0.60)) * 0.7
 
                 v = v / 5.5  # normalise ~[-1, 1]
 
@@ -313,8 +313,8 @@ class SpectrumVisualizer:
             (56,  0.50, 55,  1),
             (-18, 0.75, 80,  1),
         ]):
-            ring_r = 120 + int(bass * 90) + r_offset
-            hue = (self.hue_base + hue_off + self.time * 0.04) % 1.0
+            ring_r = 120 + int(bass * 40) + r_offset
+            hue = (self.hue_base + hue_off + self.time * 0.008) % 1.0
             col = hsv_to_rgb(hue, 0.85, 1.0)
             ring_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
             pygame.draw.circle(ring_surf, (*col, alpha), (cx, cy), ring_r, width)
