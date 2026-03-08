@@ -44,8 +44,15 @@ class CodeLayer:
 
         self.tokens = list(lex(code, PythonLexer()))
         self.items = []
+
         self.scroll_y = 0.0
         self.time = 0.0
+
+        # typing / reveal
+        self.total_chars = 0
+        self.reveal_chars = 0.0
+        self.typing_done = False
+        self.cursor_phase = 0.0
 
         self._build_layout()
 
@@ -71,13 +78,17 @@ class CodeLayer:
                         "x": x,
                         "y": y,
                         "seed": seed,
+                        "char_start": self.total_chars,
+                        "char_len": len(part),
                     })
 
+                    self.total_chars += len(part)
                     x += width
 
                 if idx < len(parts) - 1:
                     y += self.line_height
                     x = x0
+                    self.total_chars += 1  # newline timing
 
         self.total_height = max(0, y - y0) + self.line_height
 
@@ -89,12 +100,49 @@ class CodeLayer:
         if token in Token.Name.Class:
             return 1.02
         if token in Token.Operator:
-            return 0.85
+            return 0.90
         if token in Token.Comment:
-            return 0.45
+            return 0.42
         if token in Token.String:
             return 0.65
         return 0.55
+
+    def _token_is_shimmered(self, token):
+        return (
+            token in Token.Keyword
+            or token in Token.Name.Function
+            or token in Token.Operator
+            or token in Token.Name.Class
+        )
+
+    def _visible_subtext(self, item, reveal_index):
+        start = item["char_start"]
+        end = start + item["char_len"]
+
+        if reveal_index <= start:
+            return ""
+        if reveal_index >= end:
+            return item["text"]
+
+        visible_count = max(0, reveal_index - start)
+        return item["text"][:visible_count]
+
+    def _get_cursor_position(self, reveal_index):
+        # Find the currently active token and measure partial width
+        for item in self.items:
+            start = item["char_start"]
+            end = start + item["char_len"]
+
+            if start <= reveal_index <= end:
+                partial = item["text"][: max(0, reveal_index - start)]
+                partial_width = self.font.size(partial)[0]
+                return item["x"] + partial_width, item["y"]
+
+        if self.items:
+            last = self.items[-1]
+            return last["x"] + self.font.size(last["text"])[0], last["y"]
+
+        return self.panel_x + 40, self.panel_y + 40
 
     def draw(self, screen, spectrum, mode_name="PLASMA"):
         bass = float(spectrum[2]) if len(spectrum) > 2 else 0.0
@@ -102,22 +150,29 @@ class CodeLayer:
         highs = float(spectrum[20]) if len(spectrum) > 20 else mids
         energy = (bass * 0.50) + (mids * 0.35) + (highs * 0.15)
 
-        self.time += 0.016
-        self.scroll_y += 0.11 + bass * 0.18
+        dt = 0.016
+        self.time += dt
+        self.cursor_phase += dt * 3.2
+
+        # Elegant typing speed: steady base with music influence
+        if not self.typing_done:
+            cps = 18 + bass * 22 + mids * 10
+            self.reveal_chars += cps * dt
+            if self.reveal_chars >= self.total_chars:
+                self.reveal_chars = float(self.total_chars)
+                self.typing_done = True
+        else:
+            self.scroll_y += 0.11 + bass * 0.18
+
+        reveal_index = int(self.reveal_chars)
 
         panel = pygame.Surface((self.panel_w, self.panel_h), pygame.SRCALPHA)
         panel.fill((9, 13, 22, 96))
-
-        # soft top highlight
         pygame.draw.line(panel, (120, 150, 210, 55), (0, 0), (self.panel_w, 0), 2)
         pygame.draw.line(panel, (70, 90, 140, 26), (0, 1), (self.panel_w, 1), 1)
-
-        # faint inner border
         pygame.draw.rect(panel, (85, 110, 160, 28), panel.get_rect(), 1, border_radius=10)
-
         screen.blit(panel, (self.panel_x, self.panel_y))
 
-        # tiny label
         label = self.font_small.render(f"CODEWAVE // {mode_name}", True, (150, 170, 210))
         label.set_alpha(170)
         screen.blit(label, (self.panel_x + 18, self.panel_y + 6))
@@ -128,13 +183,16 @@ class CodeLayer:
 
         for item in self.items:
             token = item["token"]
-            text = item["text"]
             base = item["base_color"]
             x = item["x"]
             y = item["y"] - self.scroll_y
             seed = item["seed"]
 
             if y < self.panel_y - 40 or y > self.panel_y + self.panel_h + 20:
+                continue
+
+            text = self._visible_subtext(item, reveal_index)
+            if not text:
                 continue
 
             motion_scale = self._token_motion_scale(token)
@@ -154,7 +212,7 @@ class CodeLayer:
                 max(0, min(255, int(base[2] + b_shift + pulse))),
             )
 
-            # elegant soft glow
+            # Elegant glow
             glow = self.font.render(text, True, (
                 min(255, color[0] + 10),
                 min(255, color[1] + 10),
@@ -163,10 +221,56 @@ class CodeLayer:
             glow.set_alpha(26 + int(highs * 28))
             screen.blit(glow, (x + dx + 0.8, y + dy + 0.5))
 
-            surf = self.font.render(text, True, color)
-            screen.blit(surf, (x + dx, y + dy))
+            # Selective surreal layer: per-character shimmer on special tokens
+            if self._token_is_shimmered(token):
+                char_x = x + dx
+                for idx, ch in enumerate(text):
+                    char_seed = seed + idx * 0.31
+                    char_dx = math.sin(self.time * 2.1 + char_seed * 2.4) * (0.25 + highs * 0.9)
+                    char_dy = math.cos(self.time * 1.7 + char_seed * 1.9) * (0.12 + mids * 0.45)
+
+                    rr = int(color[0] + math.sin(self.time * 2.4 + char_seed) * (4 + highs * 16))
+                    gg = int(color[1] + math.sin(self.time * 2.0 + char_seed * 1.2) * (3 + mids * 10))
+                    bb = int(color[2] + math.sin(self.time * 2.7 + char_seed * 0.9) * (5 + bass * 14))
+
+                    ch_color = (
+                        max(0, min(255, rr)),
+                        max(0, min(255, gg)),
+                        max(0, min(255, bb)),
+                    )
+
+                    ch_glow = self.font.render(ch, True, (
+                        min(255, ch_color[0] + 18),
+                        min(255, ch_color[1] + 18),
+                        min(255, ch_color[2] + 18),
+                    ))
+                    ch_glow.set_alpha(20 + int(highs * 24))
+                    screen.blit(ch_glow, (char_x + char_dx + 0.7, y + char_dy + 0.4))
+
+                    ch_surf = self.font.render(ch, True, ch_color)
+                    screen.blit(ch_surf, (char_x + char_dx, y + char_dy))
+
+                    char_x += self.font.size(ch)[0]
+            else:
+                surf = self.font.render(text, True, color)
+                screen.blit(surf, (x + dx, y + dy))
+
+        # Typing cursor
+        if not self.typing_done or math.sin(self.cursor_phase) > 0:
+            cx, cy = self._get_cursor_position(reveal_index)
+            cx -= 0
+            cy -= self.scroll_y
+
+            if self.panel_y <= cy <= self.panel_y + self.panel_h:
+                cursor_h = self.line_height - 6
+                cursor = pygame.Surface((2, cursor_h), pygame.SRCALPHA)
+                cursor.fill((190, 220, 255, 210))
+                screen.blit(cursor, (cx + 1, cy + 3))
 
         screen.set_clip(old_clip)
 
-        if self.scroll_y > self.total_height + 40:
+        if self.typing_done and self.scroll_y > self.total_height + 40:
             self.scroll_y = -self.panel_h * 0.42
+            self.reveal_chars = 0.0
+            self.typing_done = False
+            self.scroll_y = 0.0
