@@ -106,7 +106,7 @@ class SpectrumVisualizer:
         self.peak = np.maximum(self.peak * 0.993, self.spectrum)
 
         self.hue_base += self.hue_speed + bass_now * 0.0008
-        self.time += 0.006 + bass_now * 0.012
+        self.time += 0.02 + bass_now * 0.08
 
     # ------------------------------------------------------------------ #
     #  BARS
