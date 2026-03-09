@@ -228,12 +228,8 @@ class WireSphere:
 #  Smoke particle system  — blue/white wisps drifting around the sphere
 # ──────────────────────────────────────────────────────────────────────────────
 class SmokeSystem:
-    """
-    Thin drifting wisps that originate near the sphere and shear upward.
-    Less bubbly than circular additive puffs.
-    """
     MAX_PARTICLES = 90
-    SPAWN_RATE = 1.4
+    SPAWN_RATE = 2.2
 
     def __init__(self, cx, cy, sphere_r):
         self.cx = cx
@@ -245,27 +241,22 @@ class SmokeSystem:
         self._stamps = {}
 
     def _get_stamp(self, w, h):
-        key = (max(8, int(w)), max(6, int(h)))
+        key = (max(10, int(w)), max(8, int(h)))
         if key not in self._stamps:
             sw, sh = key
             surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
 
             cx = sw // 2
             cy = sh // 2
-            max_r = max(sw, sh) * 0.5
 
             for y in range(sh):
                 for x in range(sw):
                     dx = (x - cx) / max(1, sw * 0.5)
                     dy = (y - cy) / max(1, sh * 0.5)
-
-                    # Elliptical falloff
                     d = dx * dx + dy * dy
                     if d >= 1.0:
                         continue
-
-                    # Softer core, thinner edges
-                    a = int((1.0 - d) ** 2.3 * 90)
+                    a = int((1.0 - d) ** 1.8 * 140)
                     surf.set_at((x, y), (255, 255, 255, a))
 
             self._stamps[key] = surf
@@ -274,32 +265,31 @@ class SmokeSystem:
     def _spawn(self, bass, energy):
         rng = self._rng
 
-        # Spawn from a narrower lower-side band around the sphere
-        angle = rng.uniform(math.pi * 0.15, math.pi * 0.85)
-        spread = rng.uniform(0.92, 1.08)
+        angle = rng.uniform(math.pi * 0.05, math.pi * 0.95)
+        spread = rng.uniform(0.88, 1.12)
 
         x = self.cx + math.cos(angle) * self.sphere_r * spread
-        y = self.cy + math.sin(angle) * self.sphere_r * spread * 0.50
+        y = self.cy + math.sin(angle) * self.sphere_r * spread * 0.58
 
-        vx = rng.uniform(-0.12, 0.12)
-        vy = -rng.uniform(0.22 + bass * 0.18, 0.48 + bass * 0.28)
+        vx = rng.uniform(-0.18, 0.18)
+        vy = -rng.uniform(0.30 + bass * 0.20, 0.65 + bass * 0.32)
 
-        w = rng.uniform(18, 30 + energy * 10)
-        h = rng.uniform(8, 14 + energy * 5)
-        life = rng.uniform(2.8, 4.6)
+        w = rng.uniform(26, 42 + energy * 14)
+        h = rng.uniform(10, 18 + energy * 8)
+        life = rng.uniform(3.2, 5.2)
 
         self.particles.append({
             "x": x, "y": y,
             "vx": vx, "vy": vy,
             "life": life, "max_life": life,
             "w": w, "h": h,
-            "rot": rng.uniform(-0.35, 0.35),
-            "rot_v": rng.uniform(-0.015, 0.015),
+            "rot": rng.uniform(-18, 18),
+            "rot_v": rng.uniform(-0.35, 0.35),
             "seed": rng.uniform(0.0, 1000.0),
         })
 
     def update(self, dt, bass, energy):
-        self._accum += (self.SPAWN_RATE + energy * 1.8) * dt
+        self._accum += (self.SPAWN_RATE + energy * 2.2) * dt
         while self._accum >= 1.0 and len(self.particles) < self.MAX_PARTICLES:
             self._spawn(bass, energy)
             self._accum -= 1.0
@@ -312,19 +302,16 @@ class SmokeSystem:
 
             t = 1.0 - (p["life"] / p["max_life"])
 
-            # Very gentle horizontal meander
-            p["vx"] += math.sin(p["seed"] + p["y"] * 0.018 + t * 3.5) * 0.0025
-            p["vx"] *= 0.992
-
-            # Slow rise, light drag
+            p["vx"] += math.sin(p["seed"] + p["y"] * 0.02 + t * 3.0) * 0.003
+            p["vx"] *= 0.993
             p["vy"] *= 0.998
+
             p["x"] += p["vx"] * 60 * dt
             p["y"] += p["vy"] * 60 * dt
 
-            # Stretch slightly over lifetime, not balloon
-            p["w"] *= 1.002
-            p["h"] *= 1.0008
-            p["rot"] += p["rot_v"]
+            p["w"] *= 1.0025
+            p["h"] *= 1.0012
+            p["rot"] += p["rot_v"] * dt * 60
 
             alive.append(p)
 
@@ -332,29 +319,27 @@ class SmokeSystem:
 
     def draw(self, screen, hue_base):
         for p in self.particles:
-            age = p["life"] / p["max_life"]  # 1 -> 0
+            age = p["life"] / p["max_life"]
 
-            # Ease in, then slow fade
             if age > 0.82:
                 alpha_frac = (1.0 - age) / 0.18
             else:
-                alpha_frac = age ** 0.8
+                alpha_frac = age ** 0.75
 
-            if alpha_frac < 0.03:
+            if alpha_frac < 0.02:
                 continue
 
             stamp = self._get_stamp(p["w"], p["h"])
 
-            # Keep smoke nearly neutral with tiny hue bias
-            col = mono_palette(hue_base, offset=0.015, sat=0.12, val=0.92)
+            col = mono_palette(hue_base, offset=0.01, sat=0.10, val=1.0)
+
             tinted = stamp.copy()
             tinted.fill((*col, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            tinted.set_alpha(int(alpha_frac * 72))
+            tinted.set_alpha(int(alpha_frac * 120))
 
-            rotated = pygame.transform.rotate(tinted, math.degrees(p["rot"]))
+            rotated = pygame.transform.rotate(tinted, p["rot"])
             rect = rotated.get_rect(center=(int(p["x"]), int(p["y"])))
             screen.blit(rotated, rect.topleft)
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Main visualizer
