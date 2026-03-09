@@ -31,9 +31,7 @@ def hsv_to_rgb(h, s, v):
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
-def mono_palette(hue_base, offset=0.0, sat=0.85, val=1.0):
-    """Return a colour in the monochromatic family of hue_base.
-    offset is a small hue nudge (±0.08) for warm/cool accents."""
+def mono_palette(hue_base, offset=0.0, sat=0.55, val=1.0):
     return hsv_to_rgb((hue_base + offset) % 1.0, sat, val)
 
 
@@ -45,8 +43,8 @@ class InkFluid:
     A fixed set of 'ink drop' trail points that curl slowly through the panel.
     Drawn as fading line segments — mostly black with coloured tendrils.
     """
-    N_TRAILS  = 28
-    TRAIL_LEN = 55
+    N_TRAILS  = 20
+    TRAIL_LEN = 70
 
     def __init__(self, panel_x, panel_w, height):
         self.px = panel_x
@@ -102,10 +100,10 @@ class InkFluid:
                     continue
 
                 # Monochromatic: slight hue offset per trail for analogue warmth
-                hue_off = (i / self.N_TRAILS) * 0.12 - 0.06
+                hue_off = (i / self.N_TRAILS) * 0.05 - 0.025
                 col = mono_palette(hue_base, hue_off,
-                                   sat=0.70 + energy * 0.20,
-                                   val=a_frac * (0.55 + energy * 0.35))
+                                   sat=0.42 + energy * 0.10,
+                                   val=a_frac * (0.30 + energy * 0.22))
                 alpha = int(a_frac * (80 + energy * 100))
 
                 x1, y1 = trail[j]
@@ -168,9 +166,9 @@ class WireSphere:
         return (int(self.cx + x * sc), int(self.cy + y * sc), zc)
 
     def update(self, dt, bass, mids, highs):
-        self.rot_y += dt * (0.22 + bass  * 0.28)
-        self.rot_x += dt * (0.09 + mids  * 0.14)
-        self.rot_z += dt * (0.04 + highs * 0.08)
+        self.rot_y += dt * (0.16 + bass  * 0.18)
+        self.rot_x += dt * (0.06 + mids  * 0.09)
+        self.rot_z += dt * (0.025 + highs * 0.05)
 
     def draw(self, screen, spectrum, hue_base, bass, mids, highs, asurf):
         energy  = bass * 0.5 + mids * 0.3 + highs * 0.2
@@ -211,14 +209,14 @@ class WireSphere:
         # Latitude rings — base hue
         for la_i in range(len(proj)):
             row = proj[la_i]
-            lat_off = (la_i / self.LAT) * 0.10 - 0.05   # ±0.05 warm→cool
+            lat_off = (la_i / self.LAT) * 0.04 - 0.02   # ±0.05 warm→cool
             for lo_i in range(self.LON):
                 draw_edge(row[lo_i], row[(lo_i + 1) % self.LON],
                           hue_off=lat_off, bri_scale=0.95)
 
         # Longitude spokes — slight complementary nudge for depth contrast
         for lo_i in range(self.LON):
-            lon_off = 0.06 * math.sin(lo_i / self.LON * math.pi * 2)
+            lon_off = 0.025 * math.sin(lo_i / self.LON * math.pi * 2)
             for la_i in range(self.LAT):
                 draw_edge(proj[la_i][lo_i], proj[la_i + 1][lo_i],
                           hue_off=lon_off, bri_scale=0.75)
@@ -231,112 +229,131 @@ class WireSphere:
 # ──────────────────────────────────────────────────────────────────────────────
 class SmokeSystem:
     """
-    Soft, slow-rising smoke puffs that spawn near the equator of the sphere
-    and drift upward with gentle turbulence.  Rendered as blurred soft circles
-    via a pre-baked alpha gradient stamp, blended additively.
+    Thin drifting wisps that originate near the sphere and shear upward.
+    Less bubbly than circular additive puffs.
     """
-    MAX_PARTICLES = 120
-    SPAWN_RATE    = 2.2      # particles per second at rest
+    MAX_PARTICLES = 90
+    SPAWN_RATE = 1.4
 
     def __init__(self, cx, cy, sphere_r):
-        self.cx       = cx
-        self.cy       = cy
+        self.cx = cx
+        self.cy = cy
         self.sphere_r = sphere_r
-        self.particles = []   # each: dict with x,y,vx,vy,life,max_life,size,hue,sat
-        self._rng     = np.random.default_rng(7)
-        self._accum   = 0.0
+        self.particles = []
+        self._rng = np.random.default_rng(7)
+        self._accum = 0.0
+        self._stamps = {}
 
-        # Pre-bake a soft circular stamp (64×64 radial alpha gradient)
-        self._stamp_size = 64
-        self._stamps = {}   # cache stamps by integer radius
+    def _get_stamp(self, w, h):
+        key = (max(8, int(w)), max(6, int(h)))
+        if key not in self._stamps:
+            sw, sh = key
+            surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
 
-    def _get_stamp(self, r):
-        r = max(4, int(r))
-        if r not in self._stamps:
-            sz  = r * 2 + 2
-            s   = pygame.Surface((sz, sz), pygame.SRCALPHA)
-            cx_ = r + 1
-            for i in range(r, 0, -1):
-                a = int(255 * ((1 - i / r) ** 1.8) * 0.18)
-                pygame.draw.circle(s, (255, 255, 255, a), (cx_, cx_), i)
-            self._stamps[r] = s
-        return self._stamps[r]
+            cx = sw // 2
+            cy = sh // 2
+            max_r = max(sw, sh) * 0.5
+
+            for y in range(sh):
+                for x in range(sw):
+                    dx = (x - cx) / max(1, sw * 0.5)
+                    dy = (y - cy) / max(1, sh * 0.5)
+
+                    # Elliptical falloff
+                    d = dx * dx + dy * dy
+                    if d >= 1.0:
+                        continue
+
+                    # Softer core, thinner edges
+                    a = int((1.0 - d) ** 2.3 * 90)
+                    surf.set_at((x, y), (255, 255, 255, a))
+
+            self._stamps[key] = surf
+        return self._stamps[key]
 
     def _spawn(self, bass, energy):
-        rng  = self._rng
-        # Spawn ring: random angle around sphere equator, just outside surface
-        angle  = rng.uniform(0, math.pi * 2)
-        spread = rng.uniform(0.85, 1.25)
+        rng = self._rng
+
+        # Spawn from a narrower lower-side band around the sphere
+        angle = rng.uniform(math.pi * 0.15, math.pi * 0.85)
+        spread = rng.uniform(0.92, 1.08)
+
         x = self.cx + math.cos(angle) * self.sphere_r * spread
-        y = self.cy + math.sin(angle) * self.sphere_r * spread * 0.55  # ellipse squash
+        y = self.cy + math.sin(angle) * self.sphere_r * spread * 0.50
 
-        # Velocity: mostly upward + slight outward drift + tiny random swirl
-        vx = math.cos(angle) * rng.uniform(0.05, 0.25) + rng.uniform(-0.15, 0.15)
-        vy = -rng.uniform(0.3 + bass * 0.4, 0.8 + bass * 0.6)   # up
+        vx = rng.uniform(-0.12, 0.12)
+        vy = -rng.uniform(0.22 + bass * 0.18, 0.48 + bass * 0.28)
 
-        size     = rng.uniform(18, 38 + energy * 22)
-        max_life = rng.uniform(2.2, 4.5)
-
-        # Colour: blue-white family — hue 0.58–0.68 (sky→periwinkle), near-white sat
-        hue = rng.uniform(0.58, 0.68)
-        sat = rng.uniform(0.08, 0.28)      # very desaturated → white smoke tint
+        w = rng.uniform(18, 30 + energy * 10)
+        h = rng.uniform(8, 14 + energy * 5)
+        life = rng.uniform(2.8, 4.6)
 
         self.particles.append({
             "x": x, "y": y,
             "vx": vx, "vy": vy,
-            "life": max_life, "max_life": max_life,
-            "size": size,
-            "hue": hue, "sat": sat,
+            "life": life, "max_life": life,
+            "w": w, "h": h,
+            "rot": rng.uniform(-0.35, 0.35),
+            "rot_v": rng.uniform(-0.015, 0.015),
+            "seed": rng.uniform(0.0, 1000.0),
         })
 
     def update(self, dt, bass, energy):
-        # Spawn
-        self._accum += (self.SPAWN_RATE + energy * 3.5) * dt
+        self._accum += (self.SPAWN_RATE + energy * 1.8) * dt
         while self._accum >= 1.0 and len(self.particles) < self.MAX_PARTICLES:
             self._spawn(bass, energy)
             self._accum -= 1.0
 
-        # Update
         alive = []
         for p in self.particles:
             p["life"] -= dt
             if p["life"] <= 0:
                 continue
-            p["x"]  += p["vx"]
-            p["y"]  += p["vy"]
-            # Gentle turbulence — slow horizontal sway
-            p["vx"] += math.sin(p["y"] * 0.03 + p["life"]) * 0.008
-            p["vy"] *= 0.998   # very slight drag
-            p["size"] *= 1.004  # puffs expand as they rise
+
+            t = 1.0 - (p["life"] / p["max_life"])
+
+            # Very gentle horizontal meander
+            p["vx"] += math.sin(p["seed"] + p["y"] * 0.018 + t * 3.5) * 0.0025
+            p["vx"] *= 0.992
+
+            # Slow rise, light drag
+            p["vy"] *= 0.998
+            p["x"] += p["vx"] * 60 * dt
+            p["y"] += p["vy"] * 60 * dt
+
+            # Stretch slightly over lifetime, not balloon
+            p["w"] *= 1.002
+            p["h"] *= 1.0008
+            p["rot"] += p["rot_v"]
+
             alive.append(p)
+
         self.particles = alive
 
-    def draw(self, screen):
+    def draw(self, screen, hue_base):
         for p in self.particles:
-            age_frac = p["life"] / p["max_life"]   # 1 → 0 as particle dies
-            # Fade in fast, linger, fade out
-            if age_frac > 0.85:
-                alpha_frac = (1.0 - age_frac) / 0.15
-            else:
-                alpha_frac = min(1.0, age_frac / 0.3)
+            age = p["life"] / p["max_life"]  # 1 -> 0
 
-            if alpha_frac < 0.02:
+            # Ease in, then slow fade
+            if age > 0.82:
+                alpha_frac = (1.0 - age) / 0.18
+            else:
+                alpha_frac = age ** 0.8
+
+            if alpha_frac < 0.03:
                 continue
 
-            r_px = max(4, int(p["size"] * alpha_frac * 0.9 + p["size"] * 0.1))
-            stamp = self._get_stamp(r_px)
+            stamp = self._get_stamp(p["w"], p["h"])
 
-            # Tint the stamp with the particle's blue-white colour
-            col   = hsv_to_rgb(p["hue"], p["sat"], 1.0)
-            alpha = int(alpha_frac * 155)
-
+            # Keep smoke nearly neutral with tiny hue bias
+            col = mono_palette(hue_base, offset=0.015, sat=0.12, val=0.92)
             tinted = stamp.copy()
             tinted.fill((*col, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            tinted.set_alpha(alpha)
+            tinted.set_alpha(int(alpha_frac * 72))
 
-            sx = int(p["x"]) - r_px - 1
-            sy = int(p["y"]) - r_px - 1
-            screen.blit(tinted, (sx, sy), special_flags=pygame.BLEND_ADD)
+            rotated = pygame.transform.rotate(tinted, math.degrees(p["rot"]))
+            rect = rotated.get_rect(center=(int(p["x"]), int(p["y"])))
+            screen.blit(rotated, rect.topleft)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -436,7 +453,7 @@ class SpectrumVisualizer:
         self.ink.draw(screen, self.hue_base, energy)
 
         # 2 ── Smoke wisps (blue/white, additive blend, behind bars + sphere)
-        self.smoke.draw(screen)
+        self.smoke.draw(screen, self.hue_base)
 
         # 3 ── Horizontal spectrum bars (top of right panel)
         self._draw_bars(screen, bass, mids, highs)
@@ -449,7 +466,7 @@ class SpectrumVisualizer:
         if self.beat_flash > 0.01:
             fc = mono_palette(self.hue_base, 0.04, sat=0.6, val=self.beat_flash * 0.22)
             fs = pygame.Surface((self.panel_w, self.height), pygame.SRCALPHA)
-            fs.fill((*fc, int(self.beat_flash * 38)))
+            fs.fill((*fc, int(self.beat_flash * 18)))
             screen.blit(fs, (self.panel_x, 0))
 
     # ── horizontal bars ───────────────────────────────────────────────────────
@@ -474,12 +491,12 @@ class SpectrumVisualizer:
             x_l = self.cx - (i + 1) * (bw + gap)
 
             # Monochromatic: inner bars = base hue, outer = warm accent
-            warmth  = (i / half) * 0.08          # 0 → +0.08 hue shift outward
-            hue_off = warmth - 0.04
-            sat     = 0.78 + val * 0.22
-            bri     = 0.25 + val * 0.75
+            warmth  = (i / half) * 0.04          # 0 → +0.08 hue shift outward
+            hue_off = warmth - 0.02
+            sat     = 0.50 + val * 0.14
+            bri     = 0.20 + val * 0.62
             col     = mono_palette(self.hue_base, hue_off, sat, bri)
-            tip_col = mono_palette(self.hue_base, hue_off + 0.06, 0.50, 1.0)
+            tip_col = mono_palette(self.hue_base, hue_off + 0.02, 0.28, 0.86)
 
             for x in (x_r, x_l):
                 # Body
@@ -490,7 +507,7 @@ class SpectrumVisualizer:
                 pygame.draw.rect(screen, tip_col,
                                  pygame.Rect(x + 1, cy - h, gw, h * 2), border_radius=1)
                 # Peak tick
-                p_col = mono_palette(self.peak_hue[i], 0.08, 0.9, 1.0)
+                p_col = mono_palette(self.peak_hue[i], 0.03, 0.35, 0.82)
                 pygame.draw.line(screen, p_col,
                                  (x, cy - ph), (x + bw, cy - ph), 1)
                 pygame.draw.line(screen, p_col,
