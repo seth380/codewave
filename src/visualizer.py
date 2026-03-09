@@ -227,6 +227,119 @@ class WireSphere:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+#  Smoke particle system  — blue/white wisps drifting around the sphere
+# ──────────────────────────────────────────────────────────────────────────────
+class SmokeSystem:
+    """
+    Soft, slow-rising smoke puffs that spawn near the equator of the sphere
+    and drift upward with gentle turbulence.  Rendered as blurred soft circles
+    via a pre-baked alpha gradient stamp, blended additively.
+    """
+    MAX_PARTICLES = 120
+    SPAWN_RATE    = 2.2      # particles per second at rest
+
+    def __init__(self, cx, cy, sphere_r):
+        self.cx       = cx
+        self.cy       = cy
+        self.sphere_r = sphere_r
+        self.particles = []   # each: dict with x,y,vx,vy,life,max_life,size,hue,sat
+        self._rng     = np.random.default_rng(7)
+        self._accum   = 0.0
+
+        # Pre-bake a soft circular stamp (64×64 radial alpha gradient)
+        self._stamp_size = 64
+        self._stamps = {}   # cache stamps by integer radius
+
+    def _get_stamp(self, r):
+        r = max(4, int(r))
+        if r not in self._stamps:
+            sz  = r * 2 + 2
+            s   = pygame.Surface((sz, sz), pygame.SRCALPHA)
+            cx_ = r + 1
+            for i in range(r, 0, -1):
+                a = int(255 * ((1 - i / r) ** 1.8) * 0.18)
+                pygame.draw.circle(s, (255, 255, 255, a), (cx_, cx_), i)
+            self._stamps[r] = s
+        return self._stamps[r]
+
+    def _spawn(self, bass, energy):
+        rng  = self._rng
+        # Spawn ring: random angle around sphere equator, just outside surface
+        angle  = rng.uniform(0, math.pi * 2)
+        spread = rng.uniform(0.85, 1.25)
+        x = self.cx + math.cos(angle) * self.sphere_r * spread
+        y = self.cy + math.sin(angle) * self.sphere_r * spread * 0.55  # ellipse squash
+
+        # Velocity: mostly upward + slight outward drift + tiny random swirl
+        vx = math.cos(angle) * rng.uniform(0.05, 0.25) + rng.uniform(-0.15, 0.15)
+        vy = -rng.uniform(0.3 + bass * 0.4, 0.8 + bass * 0.6)   # up
+
+        size     = rng.uniform(18, 38 + energy * 22)
+        max_life = rng.uniform(2.2, 4.5)
+
+        # Colour: blue-white family — hue 0.58–0.68 (sky→periwinkle), near-white sat
+        hue = rng.uniform(0.58, 0.68)
+        sat = rng.uniform(0.08, 0.28)      # very desaturated → white smoke tint
+
+        self.particles.append({
+            "x": x, "y": y,
+            "vx": vx, "vy": vy,
+            "life": max_life, "max_life": max_life,
+            "size": size,
+            "hue": hue, "sat": sat,
+        })
+
+    def update(self, dt, bass, energy):
+        # Spawn
+        self._accum += (self.SPAWN_RATE + energy * 3.5) * dt
+        while self._accum >= 1.0 and len(self.particles) < self.MAX_PARTICLES:
+            self._spawn(bass, energy)
+            self._accum -= 1.0
+
+        # Update
+        alive = []
+        for p in self.particles:
+            p["life"] -= dt
+            if p["life"] <= 0:
+                continue
+            p["x"]  += p["vx"]
+            p["y"]  += p["vy"]
+            # Gentle turbulence — slow horizontal sway
+            p["vx"] += math.sin(p["y"] * 0.03 + p["life"]) * 0.008
+            p["vy"] *= 0.998   # very slight drag
+            p["size"] *= 1.004  # puffs expand as they rise
+            alive.append(p)
+        self.particles = alive
+
+    def draw(self, screen):
+        for p in self.particles:
+            age_frac = p["life"] / p["max_life"]   # 1 → 0 as particle dies
+            # Fade in fast, linger, fade out
+            if age_frac > 0.85:
+                alpha_frac = (1.0 - age_frac) / 0.15
+            else:
+                alpha_frac = min(1.0, age_frac / 0.3)
+
+            if alpha_frac < 0.02:
+                continue
+
+            r_px = max(4, int(p["size"] * alpha_frac * 0.9 + p["size"] * 0.1))
+            stamp = self._get_stamp(r_px)
+
+            # Tint the stamp with the particle's blue-white colour
+            col   = hsv_to_rgb(p["hue"], p["sat"], 1.0)
+            alpha = int(alpha_frac * 155)
+
+            tinted = stamp.copy()
+            tinted.fill((*col, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            tinted.set_alpha(alpha)
+
+            sx = int(p["x"]) - r_px - 1
+            sy = int(p["y"]) - r_px - 1
+            screen.blit(tinted, (sx, sy), special_flags=pygame.BLEND_ADD)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 #  Main visualizer
 # ──────────────────────────────────────────────────────────────────────────────
 class SpectrumVisualizer:
@@ -262,6 +375,7 @@ class SpectrumVisualizer:
         # Sub-objects
         self.ink    = InkFluid(self.panel_x, self.panel_w, height)
         self.sphere = WireSphere(cx=self.cx, cy=self.sphere_y, base_r=108)
+        self.smoke  = SmokeSystem(cx=self.cx, cy=self.sphere_y, sphere_r=108)
         self._asurf = pygame.Surface((width, height), pygame.SRCALPHA)
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -309,6 +423,7 @@ class SpectrumVisualizer:
         highs = float(np.mean(self.spectrum[20:40]))
         self.sphere.update(0.016, bass, mids, highs)
         self.ink.update(0.016, bass)
+        self.smoke.update(0.016, bass, bass * 0.5 + mids * 0.3 + highs * 0.2)
 
     # ── draw ─────────────────────────────────────────────────────────────────
     def draw(self, screen):
@@ -320,10 +435,13 @@ class SpectrumVisualizer:
         # 1 ── Dark ink fluid (swirl tendrils on black)
         self.ink.draw(screen, self.hue_base, energy)
 
-        # 2 ── Horizontal spectrum bars (top of right panel)
+        # 2 ── Smoke wisps (blue/white, additive blend, behind bars + sphere)
+        self.smoke.draw(screen)
+
+        # 3 ── Horizontal spectrum bars (top of right panel)
         self._draw_bars(screen, bass, mids, highs)
 
-        # 3 ── 3-D ellipsoid
+        # 4 ── 3-D ellipsoid
         self.sphere.draw(screen, self.spectrum, self.hue_base,
                          bass, mids, highs, self._asurf)
 
