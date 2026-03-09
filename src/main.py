@@ -23,12 +23,7 @@ def draw_background(screen, width, height, split_x, t):
         )
         pygame.draw.line(screen, color, (0, i), (width, i))
 
-    # Subtle ambient rings centred in the right visualizer panel
-    cx = split_x + (width - split_x) // 2
-    cy = int(height * 0.60)
-    r  = 88 + int((t % 120) * 0.32)
-    pygame.draw.circle(screen, (22, 28, 42), (cx, cy), r, 1)
-    pygame.draw.circle(screen, (15, 20, 32), (cx, cy), r + 38, 1)
+    pass  # atmosphere handled by ink fluid layer
 
 
 def draw_vignette(screen, width, height):
