@@ -1,9 +1,10 @@
 """
 visualizer.py  —  CodeWave visualizer
-Three layers rendered together every frame:
-  1. Plasma background (right panel, lava-lamp speed)
-  2. Spectrum bars  (radiate outward from sphere centre)
-  3. 3-D wireframe ellipsoid (spins, breathes, colour-shifts with music)
+Layers (right panel):
+  1. Dark fluid ink background  — swirling tendrils, mostly black negative space
+  2. Spectrum bars              — horizontal, centred at top of panel
+  3. 3-D wireframe ellipsoid    — centred in lower portion of panel
+All in a slowly-shifting monochromatic palette (one hue + analogue accents).
 """
 
 import math
@@ -21,7 +22,7 @@ def hsv_to_rgb(h, s, v):
     i = int(h * 6); f = (h * 6) - i
     p = v * (1 - s); q = v * (1 - s * f); t = v * (1 - s * (1 - f))
     i %= 6
-    if i == 0: r, g, b = v, t, p
+    if i == 0:   r, g, b = v, t, p
     elif i == 1: r, g, b = q, v, p
     elif i == 2: r, g, b = p, v, t
     elif i == 3: r, g, b = p, q, v
@@ -30,152 +31,199 @@ def hsv_to_rgb(h, s, v):
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
+def mono_palette(hue_base, offset=0.0, sat=0.85, val=1.0):
+    """Return a colour in the monochromatic family of hue_base.
+    offset is a small hue nudge (±0.08) for warm/cool accents."""
+    return hsv_to_rgb((hue_base + offset) % 1.0, sat, val)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
-#  3-D wireframe sphere  (pure numpy, no OpenGL)
+#  Dark fluid ink background  (sparse swirl particles + curl noise streaks)
+# ──────────────────────────────────────────────────────────────────────────────
+class InkFluid:
+    """
+    A fixed set of 'ink drop' trail points that curl slowly through the panel.
+    Drawn as fading line segments — mostly black with coloured tendrils.
+    """
+    N_TRAILS  = 28
+    TRAIL_LEN = 55
+
+    def __init__(self, panel_x, panel_w, height):
+        self.px = panel_x
+        self.pw = panel_w
+        self.h  = height
+        rng = np.random.default_rng(42)
+
+        # Each trail: list of (x, y) positions, initialised randomly
+        self.trails = []
+        for _ in range(self.N_TRAILS):
+            x = panel_x + rng.uniform(0, panel_w)
+            y = rng.uniform(0, height)
+            self.trails.append([(x, y)] * self.TRAIL_LEN)
+
+        self.time  = 0.0
+        self.speeds = rng.uniform(0.4, 1.2, self.N_TRAILS)
+
+    def _curl(self, x, y, t, bass):
+        """Curl-noise-ish vector field."""
+        nx = x * 0.003
+        ny = y * 0.003
+        angle = (math.sin(nx + t * 0.18) * math.cos(ny * 0.9 + t * 0.12)
+                 + math.sin(nx * 1.7 - t * 0.09) * 0.5) * math.pi * 2
+        speed = 1.1 + bass * 1.4
+        return math.cos(angle) * speed, math.sin(angle) * speed
+
+    def update(self, dt, bass):
+        self.time += dt * (0.6 + bass * 1.2)
+        for i, trail in enumerate(self.trails):
+            hx, hy = trail[0]
+            dx, dy = self._curl(hx, hy, self.time, bass)
+            dx *= self.speeds[i]
+            dy *= self.speeds[i]
+            nx = hx + dx
+            ny = hy + dy
+            # Wrap within panel
+            if nx < self.px:           nx += self.pw
+            if nx > self.px + self.pw: nx -= self.pw
+            if ny < 0:                 ny += self.h
+            if ny > self.h:            ny -= self.h
+            self.trails[i] = [(nx, ny)] + trail[:-1]
+
+    def draw(self, screen, hue_base, energy):
+        for i, trail in enumerate(self.trails):
+            n = len(trail)
+            for j in range(n - 1):
+                # Age fraction: 0 = newest, 1 = oldest
+                age  = j / (n - 1)
+                a_frac = (1.0 - age) ** 2.2   # quadratic fade
+
+                # Only draw if bright enough
+                if a_frac < 0.04:
+                    continue
+
+                # Monochromatic: slight hue offset per trail for analogue warmth
+                hue_off = (i / self.N_TRAILS) * 0.12 - 0.06
+                col = mono_palette(hue_base, hue_off,
+                                   sat=0.70 + energy * 0.20,
+                                   val=a_frac * (0.55 + energy * 0.35))
+                alpha = int(a_frac * (80 + energy * 100))
+
+                x1, y1 = trail[j]
+                x2, y2 = trail[j + 1]
+                # Draw as a short alpha line on screen directly
+                # (we skip a surface per segment for perf — direct draw at low alpha)
+                pygame.draw.line(screen, col, (int(x1), int(y1)), (int(x2), int(y2)), 1)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  3-D wireframe ellipsoid
 # ──────────────────────────────────────────────────────────────────────────────
 class WireSphere:
-    """
-    Latitudes × longitudes vertex grid projected with a simple perspective
-    camera.  Vertices are displaced outward by spectrum bins so the mesh
-    'breathes' with the music.
-    """
-    LAT  = 18   # latitude rings  (north→south)
-    LON  = 36   # longitude spokes (east→west)
+    LAT = 16
+    LON = 32
 
-    def __init__(self, cx, cy, base_r=110):
+    def __init__(self, cx, cy, base_r=108):
         self.cx     = cx
         self.cy     = cy
         self.base_r = base_r
-        self.rot_x  = 0.0   # current rotation angles (radians)
+        self.rot_x  = 0.0
         self.rot_y  = 0.0
         self.rot_z  = 0.0
-        self._build_base_verts()
+        self._build_base()
 
-    def _build_base_verts(self):
-        """Unit-sphere vertices in (lat, lon) order."""
-        verts = []
+    def _build_base(self):
+        self.verts = []
         for la in range(self.LAT + 1):
-            phi = math.pi * la / self.LAT          # 0 … π
+            phi = math.pi * la / self.LAT
             row = []
             for lo in range(self.LON):
                 theta = 2 * math.pi * lo / self.LON
-                x = math.sin(phi) * math.cos(theta)
-                y = math.cos(phi)
-                z = math.sin(phi) * math.sin(theta)
-                row.append((x, y, z))
-            verts.append(row)
-        self.base_verts = verts   # list[LAT+1][LON] of (x,y,z) unit sphere
-
-    # ── rotation matrices ────────────────────────────────────────────────────
-    @staticmethod
-    def _rot_x(p, a):
-        x, y, z = p
-        c, s = math.cos(a), math.sin(a)
-        return (x, y * c - z * s, y * s + z * c)
+                row.append((
+                    math.sin(phi) * math.cos(theta),
+                    math.cos(phi),
+                    math.sin(phi) * math.sin(theta),
+                ))
+            self.verts.append(row)
 
     @staticmethod
-    def _rot_y(p, a):
-        x, y, z = p
-        c, s = math.cos(a), math.sin(a)
-        return (x * c + z * s, y, -x * s + z * c)
+    def _rx(p, a):
+        x, y, z = p; c, s = math.cos(a), math.sin(a)
+        return (x, y*c - z*s, y*s + z*c)
 
     @staticmethod
-    def _rot_z(p, a):
-        x, y, z = p
-        c, s = math.cos(a), math.sin(a)
-        return (x * c - y * s, x * s + y * c, z)
+    def _ry(p, a):
+        x, y, z = p; c, s = math.cos(a), math.sin(a)
+        return (x*c + z*s, y, -x*s + z*c)
 
-    def _project(self, p, fov=600):
-        """Simple perspective projection → (screen_x, screen_y, depth)."""
+    @staticmethod
+    def _rz(p, a):
+        x, y, z = p; c, s = math.cos(a), math.sin(a)
+        return (x*c - y*s, x*s + y*c, z)
+
+    def _proj(self, p, fov=580):
         x, y, z = p
-        z_cam = z + 3.5                 # push camera back
-        if z_cam < 0.01: z_cam = 0.01
-        scale = fov / z_cam
-        return (int(self.cx + x * scale), int(self.cy + y * scale), z_cam)
+        zc = z + 3.5
+        if zc < 0.01: zc = 0.01
+        sc = fov / zc
+        return (int(self.cx + x * sc), int(self.cy + y * sc), zc)
 
     def update(self, dt, bass, mids, highs):
-        # Slow base rotation; highs add a little jitter
-        self.rot_y += dt * (0.28 + bass  * 0.35)
-        self.rot_x += dt * (0.12 + mids  * 0.18)
-        self.rot_z += dt * (0.06 + highs * 0.10)
+        self.rot_y += dt * (0.22 + bass  * 0.28)
+        self.rot_x += dt * (0.09 + mids  * 0.14)
+        self.rot_z += dt * (0.04 + highs * 0.08)
 
-    def draw(self, screen, spectrum, hue_base, bass, mids, highs, alpha_surf):
-        """
-        alpha_surf: a pre-created SRCALPHA surface the same size as screen,
-                    used so we can draw semi-transparent edges without a new
-                    alloc every frame.
-        """
-        energy = bass * 0.5 + mids * 0.3 + highs * 0.2
-        n_bins = len(spectrum)
+    def draw(self, screen, spectrum, hue_base, bass, mids, highs, asurf):
+        energy  = bass * 0.5 + mids * 0.3 + highs * 0.2
+        n_bins  = len(spectrum)
 
-        # Build displaced, rotated, projected vertex grid
+        # Build projected grid
         proj = []
-        for la_i, row in enumerate(self.base_verts):
+        for la_i, row in enumerate(self.verts):
             prow = []
             for lo_i, (bx, by, bz) in enumerate(row):
-                # Map lon index → spectrum bin
                 bin_i = int(lo_i / self.LON * n_bins) % n_bins
-                disp  = spectrum[bin_i] * (0.35 + bass * 0.25)
-
-                # Squash on Z to give ellipsoid shape (like the reference)
-                r = self.base_r * (1.0 + disp)
-                sx = bx * r
-                sy = by * r * 0.55          # flatten vertically
-                sz = bz * r * 0.70
-
-                p = (sx, sy, sz)
-                p = self._rot_x(p, self.rot_x)
-                p = self._rot_y(p, self.rot_y)
-                p = self._rot_z(p, self.rot_z)
-
-                prow.append(self._project(p))
+                disp  = spectrum[bin_i] * (0.32 + bass * 0.22)
+                r     = self.base_r * (1.0 + disp)
+                # Ellipsoid squash
+                p = (bx * r, by * r * 0.52, bz * r * 0.68)
+                p = self._rx(p, self.rot_x)
+                p = self._ry(p, self.rot_y)
+                p = self._rz(p, self.rot_z)
+                prow.append(self._proj(p))
             proj.append(prow)
 
-        alpha_surf.fill((0, 0, 0, 0))
+        asurf.fill((0, 0, 0, 0))
 
-        # Draw latitude rings
+        def draw_edge(a, b, hue_off, bri_scale):
+            depth = (a[2] + b[2]) * 0.5
+            # Back-face dimming: far edges nearly invisible
+            depth_bri = max(0.0, min(1.0, 1.0 - (depth - 3.0) / 2.8))
+            if depth_bri < 0.05:
+                return
+            col   = mono_palette(hue_base, hue_off,
+                                  sat=0.80 + energy * 0.20,
+                                  val=depth_bri * bri_scale * (0.5 + energy * 0.5))
+            alpha = int(depth_bri * (130 + energy * 110))
+            lw    = 2 if depth < 3.8 else 1
+            pygame.draw.line(asurf, (*col, alpha),
+                             (a[0], a[1]), (b[0], b[1]), lw)
+
+        # Latitude rings — base hue
         for la_i in range(len(proj)):
             row = proj[la_i]
-            lat_frac = la_i / self.LAT
+            lat_off = (la_i / self.LAT) * 0.10 - 0.05   # ±0.05 warm→cool
             for lo_i in range(self.LON):
-                a = row[lo_i]
-                b = row[(lo_i + 1) % self.LON]
+                draw_edge(row[lo_i], row[(lo_i + 1) % self.LON],
+                          hue_off=lat_off, bri_scale=0.95)
 
-                depth_avg = (a[2] + b[2]) * 0.5
-                # Depth-cue brightness: closer = brighter
-                depth_bri = max(0.15, min(1.0, 1.0 - (depth_avg - 3.0) / 2.5))
-
-                hue = (hue_base + lat_frac * 0.4 + lo_i / self.LON * 0.3) % 1.0
-                sat = 0.75 + energy * 0.25
-                bri = depth_bri * (0.55 + energy * 0.45)
-                col = hsv_to_rgb(hue, sat, bri)
-
-                lw  = 2 if depth_avg < 4.0 else 1
-                alpha = int(depth_bri * (160 + energy * 80))
-                pygame.draw.line(alpha_surf, (*col, alpha),
-                                 (a[0], a[1]), (b[0], b[1]), lw)
-
-        # Draw longitude spokes
+        # Longitude spokes — slight complementary nudge for depth contrast
         for lo_i in range(self.LON):
-            lon_frac = lo_i / self.LON
+            lon_off = 0.06 * math.sin(lo_i / self.LON * math.pi * 2)
             for la_i in range(self.LAT):
-                a = proj[la_i][lo_i]
-                b = proj[la_i + 1][lo_i]
+                draw_edge(proj[la_i][lo_i], proj[la_i + 1][lo_i],
+                          hue_off=lon_off, bri_scale=0.75)
 
-                depth_avg = (a[2] + b[2]) * 0.5
-                depth_bri = max(0.15, min(1.0, 1.0 - (depth_avg - 3.0) / 2.5))
-
-                hue = (hue_base + 0.5 + lon_frac * 0.4) % 1.0
-                sat = 0.70 + energy * 0.30
-                bri = depth_bri * (0.40 + energy * 0.40)
-                col = hsv_to_rgb(hue, sat, bri)
-
-                lw    = 1
-                alpha = int(depth_bri * (100 + energy * 60))
-                pygame.draw.line(alpha_surf, (*col, alpha),
-                                 (a[0], a[1]), (b[0], b[1]), lw)
-
-        screen.blit(alpha_surf, (0, 0))
+        screen.blit(asurf, (0, 0))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -187,7 +235,7 @@ class SpectrumVisualizer:
     def __init__(self, width, height):
         self.width  = width
         self.height = height
-        self.mode   = "combined"   # always combined now; kept for key compat
+        self.mode   = "combined"
 
         self.bar_count = 64
         self.spectrum  = np.zeros(self.bar_count, dtype=float)
@@ -195,39 +243,30 @@ class SpectrumVisualizer:
 
         self.panel_x  = int(width * self.PANEL_FRAC)
         self.panel_w  = width - self.panel_x
-        self.cx       = self.panel_x + self.panel_w // 2
-        self.center_y = int(height * 0.55)
 
-        # Plasma low-res buffer
-        self.plasma_scale = 6
-        self.plasma_w     = max(1, self.panel_w // self.plasma_scale)
-        self.plasma_h     = max(1, height // self.plasma_scale)
-        self.plasma_small = pygame.Surface((self.plasma_w, self.plasma_h))
+        # Sphere sits in the lower-centre of the right panel
+        self.cx       = self.panel_x + self.panel_w // 2
+        self.sphere_y = int(height * 0.60)
+
+        # Bars sit in the upper portion
+        self.bars_y   = int(height * 0.22)   # midline of the bar graph
 
         self.time      = 0.0
-        self.hue_base  = 0.0
-        self.hue_speed = 0.0004
+        self.hue_base  = 0.0          # drifts slowly — whole palette shifts
+        self.hue_speed = 0.0003
         self.beat_flash = 0.0
         self.last_bass  = 0.0
 
-        self.peak_hue    = np.zeros(self.bar_count, dtype=float)
-        self.ring_angles = np.linspace(0, 2 * math.pi, self.bar_count, endpoint=False)
+        self.peak_hue  = np.zeros(self.bar_count, dtype=float)
 
-        # 3-D sphere
-        self.sphere = WireSphere(cx=self.cx, cy=self.center_y, base_r=105)
-
-        # Reusable alpha surface for sphere edges (avoids per-frame alloc)
-        self._alpha_surf = pygame.Surface((width, height), pygame.SRCALPHA)
-
-        # Radial bar state
-        self.bar_angles = np.linspace(0, 2 * math.pi, self.bar_count, endpoint=False)
+        # Sub-objects
+        self.ink    = InkFluid(self.panel_x, self.panel_w, height)
+        self.sphere = WireSphere(cx=self.cx, cy=self.sphere_y, base_r=108)
+        self._asurf = pygame.Surface((width, height), pygame.SRCALPHA)
 
     # ── public API ────────────────────────────────────────────────────────────
-    def set_mode(self, mode):
-        self.mode = mode   # kept for key compat, currently no-op branch
-
-    def toggle_mode(self):
-        pass   # single mode now; could cycle sub-modes later
+    def set_mode(self, mode):   self.mode = mode
+    def toggle_mode(self):      pass
 
     # ── spectrum update ───────────────────────────────────────────────────────
     def update(self, spectrum):
@@ -236,7 +275,6 @@ class SpectrumVisualizer:
 
         usable = spectrum[: max(self.bar_count * 8, self.bar_count)]
         chunks = np.array_split(usable, self.bar_count)
-
         new_vals = np.array([
             min(1.0, (float(np.mean(c)) * (1.0 - i / self.bar_count * 0.35)) ** 0.8)
             for i, c in enumerate(chunks)
@@ -244,135 +282,98 @@ class SpectrumVisualizer:
 
         for i in range(self.bar_count):
             t = new_vals[i]
-            if t > self.spectrum[i]:
-                self.spectrum[i] = self.spectrum[i] * 0.78 + t * 0.22
-            else:
-                self.spectrum[i] = self.spectrum[i] * 0.94 + t * 0.06
+            self.spectrum[i] = (self.spectrum[i] * (0.78 if t <= self.spectrum[i] else 0.60)
+                                + t * (0.22 if t <= self.spectrum[i] else 0.40))
 
         bass_now   = float(np.mean(self.spectrum[:4]))
         bass_delta = bass_now - self.last_bass
         if bass_delta > 0.08:
-            self.beat_flash = min(1.0, self.beat_flash + bass_delta * 1.4)
-            self.hue_speed  = 0.0012 + bass_delta * 0.014
+            self.beat_flash = min(1.0, self.beat_flash + bass_delta * 1.2)
+            self.hue_speed  = 0.0010 + bass_delta * 0.010
         else:
-            self.hue_speed  = max(0.0004, self.hue_speed * 0.985)
-        self.beat_flash = max(0.0, self.beat_flash - 0.018)
+            self.hue_speed  = max(0.0003, self.hue_speed * 0.988)
+        self.beat_flash = max(0.0, self.beat_flash - 0.015)
         self.last_bass  = bass_now
 
         for i in range(self.bar_count):
             if self.spectrum[i] >= self.peak[i]:
-                self.peak_hue[i] = self.hue_base + i / self.bar_count * 0.5
+                self.peak_hue[i] = self.hue_base
         self.peak = np.maximum(self.peak * 0.993, self.spectrum)
 
-        self.hue_base = (self.hue_base + self.hue_speed + bass_now * 0.0008) % 1.0
-        dt            = 0.016
-        self.time    += 0.006 + bass_now * 0.012
+        # Hue drifts slowly like a lava lamp — full cycle takes ~50 s at rest
+        self.hue_base = (self.hue_base + self.hue_speed + bass_now * 0.0006) % 1.0
+        self.time    += 0.016
 
         bass  = float(np.mean(self.spectrum[:6]))
         mids  = float(np.mean(self.spectrum[6:20]))
         highs = float(np.mean(self.spectrum[20:40]))
-        self.sphere.update(dt, bass, mids, highs)
+        self.sphere.update(0.016, bass, mids, highs)
+        self.ink.update(0.016, bass)
 
     # ── draw ─────────────────────────────────────────────────────────────────
     def draw(self, screen):
         bass  = float(np.mean(self.spectrum[:6]))
         mids  = float(np.mean(self.spectrum[6:20]))
         highs = float(np.mean(self.spectrum[20:40]))
+        energy = bass * 0.5 + mids * 0.3 + highs * 0.2
 
-        self._draw_plasma(screen, bass, mids, highs)
-        self._draw_radial_bars(screen, bass, mids, highs)
+        # 1 ── Dark ink fluid (swirl tendrils on black)
+        self.ink.draw(screen, self.hue_base, energy)
+
+        # 2 ── Horizontal spectrum bars (top of right panel)
+        self._draw_bars(screen, bass, mids, highs)
+
+        # 3 ── 3-D ellipsoid
         self.sphere.draw(screen, self.spectrum, self.hue_base,
-                         bass, mids, highs, self._alpha_surf)
-        self._draw_beat_flash(screen, bass)
+                         bass, mids, highs, self._asurf)
 
-    # ── plasma background ─────────────────────────────────────────────────────
-    def _draw_plasma(self, screen, bass, mids, highs):
-        px = pygame.PixelArray(self.plasma_small)
-        for y in range(self.plasma_h):
-            for x in range(self.plasma_w):
-                v  = math.sin(x * 0.18 + self.time * (0.30 + bass  * 0.80))
-                v += math.sin(y * 0.22 + self.time * (0.22 + mids  * 0.55))
-                v += math.sin((x + y) * 0.12 + self.time * (0.26 + highs * 0.80))
-                v += math.sin((x - y) * 0.09 + self.time * (0.18 + bass  * 0.55))
-                cx_ = x - self.plasma_w / 2
-                cy_ = y - self.plasma_h / 2
-                v  += math.sin(math.sqrt(cx_*cx_ + cy_*cy_) * 0.24
-                               - self.time * (0.40 + bass * 0.90))
-                cx2 = x - self.plasma_w * (0.3 + 0.2 * math.sin(self.time * 0.07))
-                cy2 = y - self.plasma_h * (0.6 + 0.15 * math.cos(self.time * 0.055))
-                v  += math.sin(math.sqrt(cx2*cx2 + cy2*cy2) * 0.20
-                               - self.time * (0.28 + mids * 0.60)) * 0.7
-                v   = v / 5.5
-                hue = (self.hue_base + (v + 1.0) * 0.45) % 1.0
-                sat = 0.80 + highs * 0.20
-                bri = min(1.0, 0.22 + (v + 1.0) * 0.35 + bass * 0.16)
-                r, g, b = hsv_to_rgb(hue, sat, bri)
-                if y % 2 == 0:
-                    r, g, b = max(0, r - 18), max(0, g - 18), max(0, b - 18)
-                px[x, y] = (r, g, b)
-        del px
-
-        plasma = pygame.transform.smoothscale(self.plasma_small, (self.panel_w, self.height))
-        plasma.set_alpha(140)
-        screen.blit(plasma, (self.panel_x, 0))
-
-    # ── radial bars ───────────────────────────────────────────────────────────
-    def _draw_radial_bars(self, screen, bass, mids, highs):
-        """
-        Bars shoot outward from the sphere centre in all directions,
-        like a sunburst / magnetosphere spike field.
-        """
-        energy   = bass * 0.5 + mids * 0.3 + highs * 0.2
-        inner_r  = 115 + int(bass * 20)   # just outside sphere surface
-        max_len  = 180 + int(energy * 120)
-
-        cx, cy = self.cx, self.center_y
-
-        for i in range(self.bar_count):
-            angle = self.bar_angles[i]
-            val   = self.spectrum[i]
-            bar_len = max(2, int(val * max_len))
-
-            hue_pos = i / self.bar_count
-            shimmer = math.sin(self.time * 0.5 + i * 0.18) * 0.03
-            hue     = (self.hue_base + hue_pos * 0.8 + shimmer) % 1.0
-            sat     = 0.72 + val * 0.28
-            bri     = 0.25 + val * 0.75
-
-            # Inner point (at sphere edge)
-            x1 = cx + math.cos(angle) * inner_r
-            y1 = cy + math.sin(angle) * inner_r
-
-            # Outer tip
-            x2 = cx + math.cos(angle) * (inner_r + bar_len)
-            y2 = cy + math.sin(angle) * (inner_r + bar_len)
-
-            col = hsv_to_rgb(hue, sat, bri)
-            tip = hsv_to_rgb((hue + 0.1) % 1.0, 0.5, 1.0)
-
-            # Main bar line
-            pygame.draw.line(screen, col, (int(x1), int(y1)), (int(x2), int(y2)), 2)
-
-            # Bright tip dot
-            if val > 0.15:
-                pygame.draw.circle(screen, tip, (int(x2), int(y2)), max(1, int(val * 4)))
-
-            # Peak tick mark
-            p_len = max(2, int(self.peak[i] * max_len))
-            px_   = cx + math.cos(angle) * (inner_r + p_len)
-            py_   = cy + math.sin(angle) * (inner_r + p_len)
-            p_col = hsv_to_rgb(self.peak_hue[i] % 1.0, 0.9, 1.0)
-            # Small perpendicular tick
-            perp_angle = angle + math.pi / 2
-            tx, ty = math.cos(perp_angle) * 4, math.sin(perp_angle) * 4
-            pygame.draw.line(screen, p_col,
-                             (int(px_ - tx), int(py_ - ty)),
-                             (int(px_ + tx), int(py_ + ty)), 1)
-
-    # ── beat flash ────────────────────────────────────────────────────────────
-    def _draw_beat_flash(self, screen, bass):
+        # 4 ── Beat flash
         if self.beat_flash > 0.01:
-            flash_col  = hsv_to_rgb(self.hue_base + 0.05, 0.7, self.beat_flash * 0.28)
-            flash_surf = pygame.Surface((self.panel_w, self.height), pygame.SRCALPHA)
-            flash_surf.fill((*flash_col, int(self.beat_flash * 45)))
-            screen.blit(flash_surf, (self.panel_x, 0))
+            fc = mono_palette(self.hue_base, 0.04, sat=0.6, val=self.beat_flash * 0.22)
+            fs = pygame.Surface((self.panel_w, self.height), pygame.SRCALPHA)
+            fs.fill((*fc, int(self.beat_flash * 38)))
+            screen.blit(fs, (self.panel_x, 0))
+
+    # ── horizontal bars ───────────────────────────────────────────────────────
+    def _draw_bars(self, screen, bass, mids, highs):
+        half   = self.bar_count // 2
+        gap    = 3
+        bw     = max(3, (self.panel_w // 2 - 40) // half - gap)
+        max_h  = int(self.height * 0.16)   # max bar height — compact strip
+        cy     = self.bars_y
+
+        # Subtle baseline
+        pygame.draw.line(screen, (30, 30, 35),
+                         (self.panel_x, cy), (self.width, cy), 1)
+
+        for i in range(half):
+            val     = self.spectrum[i]
+            peak_v  = self.peak[i]
+            h       = max(2, int(val   * max_h))
+            ph      = max(2, int(peak_v * max_h))
+
+            x_r = self.cx + i * (bw + gap)
+            x_l = self.cx - (i + 1) * (bw + gap)
+
+            # Monochromatic: inner bars = base hue, outer = warm accent
+            warmth  = (i / half) * 0.08          # 0 → +0.08 hue shift outward
+            hue_off = warmth - 0.04
+            sat     = 0.78 + val * 0.22
+            bri     = 0.25 + val * 0.75
+            col     = mono_palette(self.hue_base, hue_off, sat, bri)
+            tip_col = mono_palette(self.hue_base, hue_off + 0.06, 0.50, 1.0)
+
+            for x in (x_r, x_l):
+                # Body
+                pygame.draw.rect(screen, col,
+                                 pygame.Rect(x, cy - h, bw, h * 2), border_radius=2)
+                # Bright edge stripe
+                gw = max(1, bw // 3)
+                pygame.draw.rect(screen, tip_col,
+                                 pygame.Rect(x + 1, cy - h, gw, h * 2), border_radius=1)
+                # Peak tick
+                p_col = mono_palette(self.peak_hue[i], 0.08, 0.9, 1.0)
+                pygame.draw.line(screen, p_col,
+                                 (x, cy - ph), (x + bw, cy - ph), 1)
+                pygame.draw.line(screen, p_col,
+                                 (x, cy + ph), (x + bw, cy + ph), 1)
