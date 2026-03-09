@@ -198,13 +198,23 @@ class WireSphere:
             depth_bri = max(0.0, min(1.0, 1.0 - (depth - 3.0) / 2.8))
             if depth_bri < 0.05:
                 return
-            col   = mono_palette(hue_base, hue_off,)
-                                  sat=0.80 + energy * 0.20,
-                                  val=depth_bri * bri_scale * (0.62 + energy * 0.42)
-            alpha = int(depth_bri * (185 + energy * 120))
-            lw    = 2 if depth < 3.8 else 1
-            pygame.draw.line(asurf, (*col, alpha),
-                             (a[0], a[1]), (b[0], b[1]), lw)
+                col = mono_palette(
+                    hue_base,
+                    hue_off,
+                    sat=0.80 + energy * 0.20,
+                    val=depth_bri * bri_scale * (0.62 + energy * 0.42)
+                )
+
+                alpha = int(depth_bri * (185 + energy * 120))
+                lw = 2 if depth < 3.8 else 1
+
+                pygame.draw.line(
+                    asurf,
+                    (*col, alpha),
+                    (a[0], a[1]),
+                    (b[0], b[1]),
+                    lw
+                )
 
         # Latitude rings — base hue
         for la_i in range(len(proj)):
