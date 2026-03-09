@@ -200,8 +200,8 @@ class WireSphere:
                 return
             col   = mono_palette(hue_base, hue_off,
                                   sat=0.80 + energy * 0.20,
-                                  val=depth_bri * bri_scale * (0.5 + energy * 0.5))
-            alpha = int(depth_bri * (130 + energy * 110))
+                                  val=depth_bri * bri_scale * (0.62 + energy * 0.42)
+            alpha = int(depth_bri * (185 + energy * 120))
             lw    = 2 if depth < 3.8 else 1
             pygame.draw.line(asurf, (*col, alpha),
                              (a[0], a[1]), (b[0], b[1]), lw)
@@ -228,8 +228,8 @@ class WireSphere:
 #  Smoke particle system  — blue/white wisps drifting around the sphere
 # ──────────────────────────────────────────────────────────────────────────────
 class SmokeSystem:
-    MAX_PARTICLES = 90
-    SPAWN_RATE = 2.2
+    MAX_PARTICLES = 110
+    SPAWN_RATE = 2.6
 
     def __init__(self, cx, cy, sphere_r):
         self.cx = cx
@@ -241,14 +241,13 @@ class SmokeSystem:
         self._stamps = {}
 
     def _get_stamp(self, w, h):
-        key = (max(10, int(w)), max(8, int(h)))
+        key = (max(14, int(w)), max(8, int(h)))
         if key not in self._stamps:
             sw, sh = key
             surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
 
             cx = sw // 2
             cy = sh // 2
-
             for y in range(sh):
                 for x in range(sw):
                     dx = (x - cx) / max(1, sw * 0.5)
@@ -256,7 +255,7 @@ class SmokeSystem:
                     d = dx * dx + dy * dy
                     if d >= 1.0:
                         continue
-                    a = int((1.0 - d) ** 1.8 * 140)
+                    a = int((1.0 - d) ** 2.0 * 160)
                     surf.set_at((x, y), (255, 255, 255, a))
 
             self._stamps[key] = surf
@@ -265,31 +264,32 @@ class SmokeSystem:
     def _spawn(self, bass, energy):
         rng = self._rng
 
-        angle = rng.uniform(math.pi * 0.05, math.pi * 0.95)
-        spread = rng.uniform(0.88, 1.12)
+        # spawn around lower half / sides of sphere
+        angle = rng.uniform(math.pi * 0.95, math.pi * 2.05)
+        spread = rng.uniform(0.88, 1.10)
 
         x = self.cx + math.cos(angle) * self.sphere_r * spread
-        y = self.cy + math.sin(angle) * self.sphere_r * spread * 0.58
+        y = self.cy + math.sin(angle) * self.sphere_r * spread * 0.52
 
-        vx = rng.uniform(-0.18, 0.18)
-        vy = -rng.uniform(0.30 + bass * 0.20, 0.65 + bass * 0.32)
+        vx = rng.uniform(-0.16, 0.16)
+        vy = -rng.uniform(0.25 + bass * 0.16, 0.52 + bass * 0.24)
 
-        w = rng.uniform(26, 42 + energy * 14)
-        h = rng.uniform(10, 18 + energy * 8)
-        life = rng.uniform(3.2, 5.2)
+        w = rng.uniform(28, 46 + energy * 12)
+        h = rng.uniform(10, 18 + energy * 6)
+        life = rng.uniform(3.0, 5.2)
 
         self.particles.append({
             "x": x, "y": y,
             "vx": vx, "vy": vy,
             "life": life, "max_life": life,
             "w": w, "h": h,
-            "rot": rng.uniform(-18, 18),
-            "rot_v": rng.uniform(-0.35, 0.35),
-            "seed": rng.uniform(0.0, 1000.0),
+            "rot": rng.uniform(-22, 22),
+            "rot_v": rng.uniform(-0.30, 0.30),
+            "seed": rng.uniform(0.0, 999.0),
         })
 
     def update(self, dt, bass, energy):
-        self._accum += (self.SPAWN_RATE + energy * 2.2) * dt
+        self._accum += (self.SPAWN_RATE + energy * 2.4) * dt
         while self._accum >= 1.0 and len(self.particles) < self.MAX_PARTICLES:
             self._spawn(bass, energy)
             self._accum -= 1.0
@@ -302,15 +302,15 @@ class SmokeSystem:
 
             t = 1.0 - (p["life"] / p["max_life"])
 
-            p["vx"] += math.sin(p["seed"] + p["y"] * 0.02 + t * 3.0) * 0.003
-            p["vx"] *= 0.993
+            p["vx"] += math.sin(p["seed"] + p["y"] * 0.018 + t * 3.0) * 0.0035
+            p["vx"] *= 0.994
             p["vy"] *= 0.998
 
             p["x"] += p["vx"] * 60 * dt
             p["y"] += p["vy"] * 60 * dt
 
-            p["w"] *= 1.0025
-            p["h"] *= 1.0012
+            p["w"] *= 1.0018
+            p["h"] *= 1.0008
             p["rot"] += p["rot_v"] * dt * 60
 
             alive.append(p)
@@ -321,25 +321,76 @@ class SmokeSystem:
         for p in self.particles:
             age = p["life"] / p["max_life"]
 
-            if age > 0.82:
-                alpha_frac = (1.0 - age) / 0.18
+            if age > 0.84:
+                alpha_frac = (1.0 - age) / 0.16
             else:
-                alpha_frac = age ** 0.75
+                alpha_frac = age ** 0.72
 
-            if alpha_frac < 0.02:
+            if alpha_frac < 0.03:
                 continue
 
             stamp = self._get_stamp(p["w"], p["h"])
 
-            col = mono_palette(hue_base, offset=0.01, sat=0.10, val=1.0)
+            col = mono_palette(hue_base, offset=0.012, sat=0.16, val=0.96)
 
             tinted = stamp.copy()
             tinted.fill((*col, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            tinted.set_alpha(int(alpha_frac * 120))
+            tinted.set_alpha(int(alpha_frac * 132))
 
             rotated = pygame.transform.rotate(tinted, p["rot"])
             rect = rotated.get_rect(center=(int(p["x"]), int(p["y"])))
             screen.blit(rotated, rect.topleft)
+
+# Plasma Field
+class PlasmaField:
+    def __init__(self, panel_x, panel_w, height):
+        self.px = panel_x
+        self.pw = panel_w
+        self.h = height
+        self.scale = 7
+        self.sw = max(1, panel_w // self.scale)
+        self.sh = max(1, height // self.scale)
+        self.small = pygame.Surface((self.sw, self.sh))
+        self.time = 0.0
+
+    def update(self, dt, bass, mids, highs):
+        self.time += dt * (0.55 + bass * 0.55 + mids * 0.20)
+
+    def draw(self, screen, hue_base, bass, mids, highs):
+        px = pygame.PixelArray(self.small)
+
+        for y in range(self.sh):
+            ny = y / max(1, self.sh)
+            for x in range(self.sw):
+                nx = x / max(1, self.sw)
+
+                v = 0.0
+                v += math.sin((x * 0.22) + self.time * (1.2 + bass * 2.0))
+                v += math.sin((y * 0.19) + self.time * (0.9 + mids * 1.5))
+                v += math.sin((x + y) * 0.12 + self.time * (1.1 + highs * 2.4))
+
+                cx = x - self.sw / 2
+                cy = y - self.sh / 2
+                dist = math.sqrt(cx * cx + cy * cy)
+                v += math.sin(dist * 0.22 - self.time * (1.6 + bass * 2.2))
+
+                glow = (v * 0.25 + 1.0) * 0.5
+                glow = max(0.0, min(1.0, glow))
+
+                # restrained monochrome family
+                col = mono_palette(
+                    hue_base,
+                    offset=0.015 * math.sin(nx * math.pi * 2),
+                    sat=0.28 + mids * 0.10,
+                    val=0.08 + glow * (0.22 + bass * 0.10),
+                )
+                px[x, y] = col
+
+        del px
+
+        plasma = pygame.transform.smoothscale(self.small, (self.pw, self.h))
+        plasma.set_alpha(185)
+        screen.blit(plasma, (self.px, 0))
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Main visualizer
@@ -358,6 +409,7 @@ class SpectrumVisualizer:
 
         self.panel_x  = int(width * self.PANEL_FRAC)
         self.panel_w  = width - self.panel_x
+        self.plasma = PlasmaField(self.panel_x, self.panel_w, height)
 
         # Sphere sits in the lower-centre of the right panel
         self.cx       = self.panel_x + self.panel_w // 2
@@ -426,6 +478,7 @@ class SpectrumVisualizer:
         self.sphere.update(0.016, bass, mids, highs)
         self.ink.update(0.016, bass)
         self.smoke.update(0.016, bass, bass * 0.5 + mids * 0.3 + highs * 0.2)
+        self.plasma.update(0.016, bass, mids, highs)
 
     # ── draw ─────────────────────────────────────────────────────────────────
     def draw(self, screen):
@@ -434,24 +487,27 @@ class SpectrumVisualizer:
         highs = float(np.mean(self.spectrum[20:40]))
         energy = bass * 0.5 + mids * 0.3 + highs * 0.2
 
-        # 1 ── Dark ink fluid (swirl tendrils on black)
+        # 1 ── plasma field base
+        self.plasma.draw(screen, self.hue_base, bass, mids, highs)
+
+        # 2 ── ink tendrils
         self.ink.draw(screen, self.hue_base, energy)
 
-        # 2 ── Smoke wisps (blue/white, additive blend, behind bars + sphere)
+        # 3 ── smoke
         self.smoke.draw(screen, self.hue_base)
 
-        # 3 ── Horizontal spectrum bars (top of right panel)
+        # 4 ── bars
         self._draw_bars(screen, bass, mids, highs)
 
-        # 4 ── 3-D ellipsoid
+        # 5 ── sphere
         self.sphere.draw(screen, self.spectrum, self.hue_base,
-                         bass, mids, highs, self._asurf)
+                     bass, mids, highs, self._asurf)
 
-        # 4 ── Beat flash
+        # 6 ── beat flash
         if self.beat_flash > 0.01:
-            fc = mono_palette(self.hue_base, 0.04, sat=0.6, val=self.beat_flash * 0.22)
+            fc = mono_palette(self.hue_base, 0.02, sat=0.30, val=self.beat_flash * 0.12)
             fs = pygame.Surface((self.panel_w, self.height), pygame.SRCALPHA)
-            fs.fill((*fc, int(self.beat_flash * 18)))
+            fs.fill((*fc, int(self.beat_flash * 16)))
             screen.blit(fs, (self.panel_x, 0))
 
     # ── horizontal bars ───────────────────────────────────────────────────────
